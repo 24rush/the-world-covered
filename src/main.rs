@@ -1,15 +1,16 @@
-use strava::Api;
-
-mod database;
-mod strava;
+use ground_covered::{App};
 
 fn main() {
-    let redis_con = database::redis_db::RedisConnection::new();
-    let s: Result<String, redis::RedisError> = redis_con.get("45435345", "ertert");
+    let current_athlete_id = String::from("4399230");
+    let app = App::new(&current_athlete_id);
 
-    let api = Api::new(&redis_con);
-
-    if let Ok(s) = s {
-        println!("{:?}", s);
+    if let None = app.get_athlete(&current_athlete_id) {
+        app.create_athlete(&current_athlete_id);
     }
+    
+    let _athlete_data = app.get_athlete(&current_athlete_id).unwrap();
+    
+    //app.sync_athlete_activities(&current_athlete_id);
+
+    app.check_database_integrity();
 }
