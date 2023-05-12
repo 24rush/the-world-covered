@@ -101,23 +101,23 @@ impl Api {
         }
     }
 
-    pub fn authenticate_athlete(athlete_id: &String) -> Self {        
+    pub fn authenticate_athlete(athlete_id: i64) -> Self {        
         Self {    
             auth : Auth::new(athlete_id),            
         }
     }
 
-    pub fn get_activity(&self, act_id: &str) -> Option<serde_json::Value> {
+    pub fn get_activity(&self, act_id: i64) -> Option<serde_json::Value> {
         Api::get_request(
             &self.auth.get_access_token(),
-            &(STRAVA_BASE_URL.to_string() + &format!("activities/{}", act_id))
+            &(STRAVA_BASE_URL.to_string() + &format!("activities/{}", act_id.to_string()))
         )
     }
 
-    pub fn get_telemetry(&self, act_id: &str) -> Option<serde_json::Value> {
+    pub fn get_telemetry(&self, act_id: i64) -> Option<serde_json::Value> {
         Api::get_request(
             &self.auth.get_access_token(),
-            &(STRAVA_BASE_URL.to_string() + &format!("activities/{}/streams?keys=time,latlng,altitude,velocity_smooth,grade_smooth,distance", act_id))
+            &(STRAVA_BASE_URL.to_string() + &format!("activities/{}/streams?keys=time,latlng,altitude,velocity_smooth,grade_smooth,distance&key_by_type=true", act_id.to_string()))
         )
     }
 

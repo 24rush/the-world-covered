@@ -12,7 +12,7 @@ struct Secrets {
 }
 
 pub struct Auth {
-    athlete_id: String,
+    athlete_id: i64,
     athlete_tokens: AthleteTokens,
     secrets: Secrets,
     persistance: Persistance
@@ -46,15 +46,15 @@ impl Auth {
                 &mut self.athlete_tokens,
             );
 
-            self.persistance.set_athlete_tokens(&self.athlete_id, &self.athlete_tokens);
+            self.persistance.set_athlete_tokens(self.athlete_id, &self.athlete_tokens);
         }
     }
 
-    pub fn new(athlete_id: &String) -> Self {        
+    pub fn new(athlete_id: i64) -> Self {        
         // Start with defaults
         let mut this = Self {
-            athlete_id: athlete_id.to_string(),
-            athlete_tokens: AthleteData::new().tokens,
+            athlete_id,
+            athlete_tokens: AthleteData::new(athlete_id).tokens,
             secrets: Auth::read_secrets_from_file(),
             persistance :Persistance::new()
         };
