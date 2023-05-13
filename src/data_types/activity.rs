@@ -1,5 +1,9 @@
 use serde_derive::Deserialize;
 
+use super::common::Identifiable;
+
+pub type ActivityId = i64;
+
 #[derive(Debug, Deserialize)]
 pub struct Segment {
     pub id: i64,
@@ -12,6 +16,13 @@ pub struct SegmentEffort {
 
 #[derive(Debug, Deserialize)]
 pub struct Activity {
-    pub _id: i64,
+    pub _id: f64,
     pub segment_efforts: Vec<SegmentEffort>,
+    pub r#type: String,
+}
+
+impl Identifiable for Activity {
+    fn id(&self) -> i64 {
+        self._id as i64
+    }
 }

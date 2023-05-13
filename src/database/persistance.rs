@@ -1,19 +1,34 @@
 use mongodb::{
-    bson::{self, Bson},
+    bson::{self, doc},
     sync::Collection,
 };
 
 use crate::data_types::{
+    activity::Activity,
     athlete::{AthleteData, AthleteTokens},
+    telemetry::Telemetry,
 };
 
 use super::{cursors::I64Cursor, mongodb::MongoConnection};
 
 struct Connections {
-    athletes: Collection<AthleteData>,
-    activities: Collection<mongodb::bson::Document>,
-    telemetry: Collection<mongodb::bson::Document>,
+    typed_athletes: Collection<AthleteData>,
+
+    docs_activities: Collection<mongodb::bson::Document>,
+    typed_activities: Collection<Activity>,
+
+    docs_telemetry: Collection<mongodb::bson::Document>,
+    typed_telemetry: Collection<Telemetry>,
+
+    segments: Collection<mongodb::bson::Document>,
 }
+
+pub enum ResourceType {
+    Activity,
+    Segment,
+    Telemetry,
+}
+
 pub struct Persistance {
     pub db_conn: MongoConnection,
     colls: Connections,
@@ -22,77 +37,71 @@ pub struct Persistance {
 impl Persistance {
     pub fn new() -> Self {
         let mongo_conn = MongoConnection::new();
-        let athletes: Collection<AthleteData> = mongo_conn.collection("athletes");
-        let activities: Collection<mongodb::bson::Document> = mongo_conn.collection("activities");
-        let telemetry: Collection<mongodb::bson::Document> = mongo_conn.collection("telemetry");
+
+        let typed_athletes: Collection<AthleteData> = mongo_conn.collection("athletes");
+
+        let docs_activities: Collection<mongodb::bson::Document> =
+            mongo_conn.collection("activities");
+        let typed_activities: Collection<Activity> = mongo_conn.collection("activities");
+
+        let docs_telemetry: Collection<mongodb::bson::Document> =
+            mongo_conn.collection("telemetry");
+        let typed_telemetry: Collection<Telemetry> = mongo_conn.collection("telemetry");
+
+        let segments: Collection<mongodb::bson::Document> = mongo_conn.collection("segments");
 
         Self {
             db_conn: mongo_conn,
             colls: Connections {
-                athletes,
-                activities,
-                telemetry,
+                typed_athletes,
+
+                docs_activities,
+                typed_activities,
+
+                docs_telemetry,
+                typed_telemetry,
+
+                segments,
             },
         }
     }
 
     pub fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
-        return self
-            .db_conn
-            .json_get::<i64, AthleteData>(id, &self.colls.athletes);
+        self.db_conn
+            .find_one(&self.colls.typed_athletes, doc! {"_id": id})
     }
 
-    pub fn get_activity(&self, id: i64) -> Option<mongodb::bson::Document> {
-        if let Some(mut activity) = self.db_conn.json_get(id, &self.colls.activities) {
-            let i64_id = match activity.get("_id").unwrap() {
-                Bson::Int32(_) => activity.get_i32("_id").unwrap() as i64,
-                Bson::Int64(_) => activity.get_i64("_id").unwrap() as i64,
-                Bson::Double(_) => activity.get_f64("_id").unwrap() as i64,
+    pub fn get_activity(&self, id: i64) -> Option<Activity> {
+        self.db_conn
+            .find_one(&self.colls.typed_activities, doc! {"_id": id})
+    }
 
-                _ => panic!("Unknown type for mapping"),
-            };
+    pub fn get_telemetry_by_id(&self, id: i64) -> Option<Telemetry> {
+        self.db_conn
+            .find_one(&self.colls.typed_telemetry, doc! {"_id": id})
+    }
 
-            activity.remove("_id");
-            activity.insert("_id", i64_id);
-
-            return Some(activity);
-        }
-
-        return None;
+    pub fn get_telemetry(&self, ath_id: i64) -> mongodb::sync::Cursor<Telemetry> {
+        self.db_conn
+            .find::<Telemetry>(&self.colls.typed_telemetry, doc! {"athlete.id": ath_id})
     }
 
     pub fn get_athlete_activity_ids(&self, _id: i64) -> I64Cursor {
         self.db_conn
-            .key_ids::<bson::Document>(&self.colls.activities)
+            .keys_id::<bson::Document>(&self.colls.docs_activities)
     }
 
-    pub fn activity_exists(&self, act_id: i64) -> bool {
-        self.db_conn.exists(&self.colls.activities, act_id)
+    pub fn get_athlete_activities(&self, ath_id: i64) -> mongodb::sync::Cursor<Activity> {
+        self.db_conn
+            .find::<Activity>(&self.colls.typed_activities, doc! {"athlete.id": ath_id})
     }
 
-    pub fn telemetry_exists(&self, act_id: i64) -> bool {
-        self.db_conn.exists(&self.colls.telemetry, act_id)
-    }
-
-    pub fn store_athlete_activity(
-        &self,
-        act_id: i64,
-        json: &mut serde_json::Value,
-    ) -> Option<bool> {
-        json["_id"] = serde_json::Value::Number(act_id.into());
-
-        self.db_conn.json_set(&self.colls.activities, &json)
-    }
-
-    pub fn get_after_before_timestamps(&self, id: i64) -> (i64, i64) {
-        let after_ts = 0;
-        let before_ts = 0;
-
-        if let Some(athlete_data) = self.db_conn.json_get(id, &self.colls.athletes) {
-            return (athlete_data.after_ts, athlete_data.before_ts);
+    pub fn exists_resource(&self, res_type: ResourceType, res_id: i64) -> bool {
+        match res_type {
+            ResourceType::Activity => self.db_conn.exists(&self.colls.docs_activities, res_id),
+            ResourceType::Segment => self.db_conn.exists(&self.colls.segments, res_id),
+            ResourceType::Telemetry => self.db_conn.exists(&self.colls.docs_telemetry, res_id),
         }
-
-        (after_ts, before_ts)
     }
 
     pub fn save_after_before_timestamps(
@@ -102,16 +111,16 @@ impl Persistance {
         before_ts: i64,
     ) -> Option<bool> {
         self.db_conn
-            .json_set_field(id, &self.colls.athletes, &"before_ts", &before_ts)
+            .update_field(id, &self.colls.typed_athletes, &"before_ts", &before_ts)
             .unwrap();
 
         self.db_conn
-            .json_set_field(id, &self.colls.athletes, &"after_ts", &after_ts)
+            .update_field(id, &self.colls.typed_athletes, &"after_ts", &after_ts)
     }
 
     pub fn set_athlete_data(&self, athlete_data: &AthleteData) -> Option<bool> {
         self.db_conn
-            .set::<AthleteData>(&self.colls.athletes, athlete_data)
+            .upsert_one::<AthleteData>(&self.colls.typed_athletes, athlete_data)
     }
 
     pub fn get_athlete_tokens(&self, id: i64) -> Option<AthleteTokens> {
@@ -119,17 +128,26 @@ impl Persistance {
     }
 
     pub fn set_athlete_tokens(&self, id: i64, athlete_tokens: &AthleteTokens) -> Option<bool> {
-        self.db_conn.json_set_field(
+        self.db_conn.update_field(
             id,
-            &self.colls.athletes,
+            &self.colls.typed_athletes,
             "tokens",
             &bson::to_document(athlete_tokens).unwrap(),
         )
     }
 
-    pub fn set_activity_streams(&self, act_id: i64, json: &mut serde_json::Value) -> Option<bool> {
-        json["_id"] = serde_json::Value::Number(act_id.into());
+    pub fn store_resource(
+        &self,
+        res_type: ResourceType,
+        res_id: i64,
+        json: &mut serde_json::Value,
+    ) -> Option<bool> {
+        json["_id"] = serde_json::Value::Number(res_id.into());
 
-        self.db_conn.json_set(&self.colls.telemetry, json)
+        match res_type {
+            ResourceType::Activity => self.db_conn.upsert_one_raw(&self.colls.docs_activities, &json),
+            ResourceType::Segment => self.db_conn.upsert_one_raw(&self.colls.segments, &json),
+            ResourceType::Telemetry => self.db_conn.upsert_one_raw(&self.colls.docs_telemetry, &json),
+        }
     }
 }

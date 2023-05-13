@@ -18,9 +18,28 @@ use(database);
 // Create a new collection.
 //db.createCollection(collection);
 
-//let old = db.activities.findOne( {"_id": 2439073509})
+let res = db.activities.find({ "athlete.id": 4399230 })
+
+while (res.hasNext()) {
+  var doc = res.next();
+  let type = doc["type"];    
+  
+  db.telemetry.updateOne({"_id": doc["_id"] },
+    { $set: { "type" : type} },
+    {
+      upsert: false,
+      multi: false
+    })
+}
 
 /*
+db.telemetry.updateMany({},
+  { $set: { "athlete": { "id": 4399230 } } },
+  {
+    upsert: false,
+    multi: false
+  })
+
 while (res.hasNext()) {
   var doc = res.next();
 
@@ -32,7 +51,7 @@ while (res.hasNext()) {
 }
 */
 
-
+/*
 db.athletes.insertOne({"_id" : 4399230, "after_ts" : 1683557390, "before_ts" : 1683557390,
   "tokens" : {
     "access_token": "faa9ec8836d6ba205724bda7f769e49ecfb9a778",
@@ -40,4 +59,4 @@ db.athletes.insertOne({"_id" : 4399230, "after_ts" : 1683557390, "before_ts" : 1
     "expires_at" : 1683837165
   }
 })
-
+*/

@@ -36,7 +36,7 @@ impl MongoConnection {
         }
     }
 
-    pub fn key_ids<T: DeserializeOwned + Unpin + Send + Sync>(
+    pub fn keys_id<T: DeserializeOwned + Unpin + Send + Sync>(
         &self,
         collection: &Collection<mongodb::bson::Document>,
     ) -> I64Cursor {
@@ -46,23 +46,32 @@ impl MongoConnection {
         I64Cursor::new(cursor, Self::doc_id_to_i64)
     }
 
-    pub fn json_get<KT, T: DeserializeOwned + Unpin + Send + Sync>(
-        &self,
-        key: KT,
+    pub fn find<T: DeserializeOwned + Unpin + Send + Sync>(
+        &self,        
         collection: &Collection<T>,
-    ) -> Option<T>
-    where
-        Bson: From<KT>,
+        query: Document,
+    ) -> mongodb::sync::Cursor<T>    
     {
         collection
-            .find_one(Some(doc! {"_id": key}), None)
+            .find(query, None)
             .ok()
             .unwrap()
     }
 
-    // Generic functions to set a JSON (used when retrieving data from web APIs)
+    pub fn find_one<T: DeserializeOwned + Unpin + Send + Sync>(
+        &self,        
+        collection: &Collection<T>,
+        query: Document,
+    ) -> Option<T>
+    {
+        collection
+            .find_one(query, None)
+            .ok()
+            .unwrap()
+    }
 
-    pub fn json_set<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
+    // Function to set a JSON (used when retrieving data from web APIs)
+    pub fn upsert_one_raw<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
         &self,
         collection: &Collection<T>,
         doc: &serde_json::Value,
@@ -72,7 +81,7 @@ impl MongoConnection {
     {
         let res = collection
             .replace_one(
-                doc! {"_id": doc.get("_id").unwrap().as_i64()},
+                doc! {"_id": doc.get("_id").unwrap().as_f64().unwrap() as i64},
                 bson::to_document(doc).unwrap().borrow(),
                 ReplaceOptions::builder().upsert(true).build(),
             )
@@ -81,7 +90,23 @@ impl MongoConnection {
         Some(res.modified_count > 0)
     }
 
-    pub fn json_set_field<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(
+    // Function to set a typed object 
+    pub fn upsert_one<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
+        &self,
+        collection: &Collection<T>,
+        doc: &T,
+    ) -> Option<bool>
+    where
+        T: Identifiable,
+    {
+        let res = collection
+            .replace_one(doc! {"_id": doc.id()}, doc, None)
+            .unwrap();
+
+        Some(res.modified_count > 0)
+    }
+
+    pub fn update_field<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(
         &self,
         key: KT,
         collection: &Collection<T>,
@@ -103,21 +128,6 @@ impl MongoConnection {
                 .modified_count
                 > 0,
         )
-    }
-
-    pub fn set<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
-        &self,
-        collection: &Collection<T>,
-        doc: &T,
-    ) -> Option<bool>
-    where
-        T: Identifiable,
-    {
-        let res = collection
-            .replace_one(doc! {"_id": doc.id()}, doc, None)
-            .unwrap();
-
-        Some(res.modified_count > 0)
     }
 
     pub fn exists<KT, T: DeserializeOwned + Unpin + Send + Sync>(

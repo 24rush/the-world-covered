@@ -2,7 +2,7 @@ use chrono::Utc;
 use serde_derive::Deserialize;
 use toml;
 
-use crate::{data_types::athlete::{AthleteData, AthleteTokens}, database::persistance::{Persistance}, strava::api::Api};
+use crate::{data_types::athlete::{AthleteData, AthleteTokens}, database::persistance::{Persistance}, strava::api::StravaApi};
 
 #[derive(Deserialize, Debug)]
 struct Secrets {
@@ -11,14 +11,14 @@ struct Secrets {
     user_authorization_code: String,
 }
 
-pub struct Auth {
+pub struct StravaAuth {
     athlete_id: i64,
     athlete_tokens: AthleteTokens,
     secrets: Secrets,
     persistance: Persistance
 }
 
-impl Auth {
+impl StravaAuth {
     fn read_secrets_from_file() -> Secrets {
         let secrets_content = std::fs::read_to_string(
             std::env::current_dir()
@@ -39,7 +39,7 @@ impl Auth {
         if current_ts > self.athlete_tokens.expires_at as i64 {
             println!("Tokens EXPIRED. Refreshing");
 
-            Api::get_refreshed_tokens(
+            StravaApi::get_refreshed_tokens(
                 &self.secrets.client_id,
                 &self.secrets.client_secret,
                 &self.secrets.user_authorization_code,
@@ -55,14 +55,14 @@ impl Auth {
         let mut this = Self {
             athlete_id,
             athlete_tokens: AthleteData::new(athlete_id).tokens,
-            secrets: Auth::read_secrets_from_file(),
+            secrets: StravaAuth::read_secrets_from_file(),
             persistance :Persistance::new()
         };
 
         if let Some(athlete_tokens) = this.persistance.get_athlete_tokens(athlete_id) {
             this.athlete_tokens = athlete_tokens;
             
-            Auth::refresh_tokens_if_expired(&mut this);
+            StravaAuth::refresh_tokens_if_expired(&mut this);
         }        
 
         println!(

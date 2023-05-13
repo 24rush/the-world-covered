@@ -2,15 +2,15 @@ use serde_json::Value;
 use curl::easy::{Easy, List};
 
 use crate::data_types::athlete::AthleteTokens;
-use crate::strava::auth::Auth;
+use crate::strava::auth::StravaAuth;
 
 const STRAVA_BASE_URL: &str = "https://www.strava.com/api/v3/";
 
-pub struct Api {    
-    auth: Auth,
+pub struct StravaApi {    
+    auth: StravaAuth,
 }
 
-impl Api {
+impl StravaApi {
     pub fn get_refreshed_tokens(
         client_id: &str,
         client_secret: &str,
@@ -84,7 +84,7 @@ impl Api {
 
         let result = serde_json::from_str(s.unwrap());
 
-        Api::verify_if_error(result)
+        StravaApi::verify_if_error(result)
     }
 
     fn verify_if_error(
@@ -103,26 +103,40 @@ impl Api {
 
     pub fn authenticate_athlete(athlete_id: i64) -> Self {        
         Self {    
-            auth : Auth::new(athlete_id),            
+            auth : StravaAuth::new(athlete_id),            
         }
     }
 
     pub fn get_activity(&self, act_id: i64) -> Option<serde_json::Value> {
-        Api::get_request(
+        StravaApi::get_request(
             &self.auth.get_access_token(),
             &(STRAVA_BASE_URL.to_string() + &format!("activities/{}", act_id.to_string()))
         )
     }
 
-    pub fn get_telemetry(&self, act_id: i64) -> Option<serde_json::Value> {
-        Api::get_request(
+    pub fn get_activity_telemetry(&self, act_id: i64) -> Option<serde_json::Value> {
+        StravaApi::get_request(
             &self.auth.get_access_token(),
             &(STRAVA_BASE_URL.to_string() + &format!("activities/{}/streams?keys=time,latlng,altitude,velocity_smooth,grade_smooth,distance&key_by_type=true", act_id.to_string()))
         )
     }
 
+    pub fn get_segment(&self, seg_id: i64) -> Option<serde_json::Value> {
+        StravaApi::get_request(
+            &self.auth.get_access_token(),
+            &(STRAVA_BASE_URL.to_string() + &format!("segments/{}", seg_id.to_string()))
+        )
+    }
+
+    pub fn get_segment_telemetry(&self, seg_id: i64) -> Option<serde_json::Value> {
+        StravaApi::get_request(
+            &self.auth.get_access_token(),
+            &(STRAVA_BASE_URL.to_string() + &format!("/segments/{}/streams?keys=latlng,distance,altitude&key_by_type=true", seg_id.to_string()))
+        )
+    }
+
     pub fn list_athlete_activities(&self, after_ts: i64, before_ts: i64, per_page:usize, page: usize) -> Option<Vec<Value>> {         
-        let result = Api::get_request(
+        let result = StravaApi::get_request(
             &self.auth.get_access_token(),
             &(STRAVA_BASE_URL.to_string()
                 + &format!(
