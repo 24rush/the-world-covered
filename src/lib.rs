@@ -137,25 +137,22 @@ impl App {
         let telemetries = self.persistance.get_telemetry(self.loggedin_athlete_id);
 
         let mut processor = Commonality::new();
-
         let mut vec_data : Vec<Telemetry> =  Vec::new();
     
-        let a = self.persistance.get_telemetry_by_id(4401471663).unwrap();
-        let b = self.persistance.get_telemetry_by_id(3354217177).unwrap();        
-    
-        
-        let items_to_process = 50;
+        let items_to_process = 1500;
         for telemetry in telemetries {            
             vec_data.push(telemetry.unwrap());
 
-            if vec_data.len() == items_to_process {
+            print!("\rPushed {}", vec_data.len());
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+            
+            if vec_data.len() >= items_to_process {
                 break;
             }
-        }        
-        processor.set_data(vec_data.iter().map(|v| v).collect());
-        
+        }      
+        print!("\r");
 
-        //processor.set_data(vec![&a, &b]);
+        processor.set_data(vec_data.iter().map(|v| v).collect());
         processor.execute();
     }
 

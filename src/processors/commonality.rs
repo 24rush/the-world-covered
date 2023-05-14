@@ -1,6 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
-    mem::swap,
+    collections::{HashMap, HashSet}, io::Write
 };
 
 use crate::data_types::{
@@ -9,8 +8,11 @@ use crate::data_types::{
 };
 
 type LatLngReduced = u32;
+type Telem2TelemMatchResult = (i32, TelemetryId, TelemetryId);
+type MatchedTelemetriesResult = Vec<HashSet<TelemetryId>>;
 
 const DIGIT_ACCURACY: f32 = 3.5;
+const MATCH_THRESHOLD: i32 = 90;
 
 #[derive(Default, Debug)]
 struct PointOccurence {
@@ -38,20 +40,26 @@ impl<'a> Commonality<'a> {
 
     pub fn set_data(&mut self, data: Vec<&'a Telemetry>) {
         data.iter().for_each(|v| {
-            self.data.insert(v._id as i64, v);
+            self.data.insert(v.id(), v);
         });
     }
 
-    pub fn execute(&self) {
+    pub fn execute(&self) -> MatchedTelemetriesResult {
         type ActivityTypeData = HashMap<LatLngReduced, HashMap<LatLngReduced, PointOccurence>>;
 
         let mut unique_points: HashMap<String, ActivityTypeData> = HashMap::new();
         let mut act_to_act_points: HashMap<TelemetryId, HashMap<TelemetryId, u32>> = HashMap::new();
 
-        for (_, act_telemetry_ref) in &self.data {
-            let act_id = act_telemetry_ref.id();
+        let mut act_count_processed = 1.0;
 
-            for latlngs in &act_telemetry_ref.latlng.data {
+        for (_, telemetry_ref) in &self.data {
+            let act_id = telemetry_ref.id();
+                    
+            print!("\rProcessing {:.0}%", 100.0 * act_count_processed / (self.data.len() as f32));
+            std::io::stdout().flush().unwrap();
+            act_count_processed += 1.0;
+
+            for latlngs in &telemetry_ref.latlng.data {
                 let lat = latlngs[0];
                 let long = latlngs[1];
 
@@ -59,7 +67,7 @@ impl<'a> Commonality<'a> {
                 let reduced_long = Commonality::reduce_accuracy(long);
 
                 let set_telem_ids = &mut unique_points
-                    .entry(act_telemetry_ref.r#type.to_string())
+                    .entry(telemetry_ref.r#type.to_string())
                     .or_default()
                     .entry(reduced_lat)
                     .or_insert(HashMap::from([(reduced_long, PointOccurence::new())]))
@@ -72,7 +80,7 @@ impl<'a> Commonality<'a> {
                 let vec_act_ids: Vec<&i64> = set_telem_ids.iter().collect();
 
                 if vec_act_ids.len() > 1 {
-                    for i in 0..vec_act_ids.len() {                        
+                    for i in 0..vec_act_ids.len() {
                         let dest_act = *vec_act_ids[i];
 
                         if act_id == dest_act {
@@ -89,20 +97,58 @@ impl<'a> Commonality<'a> {
             }
         }
 
-        let mut results : Vec<(i32, TelemetryId, TelemetryId)> = Vec::new();
+        print!("\r");
+
+        let mut results : Vec<Telem2TelemMatchResult> = Vec::new();
+
+        let compute_match_percent = |src, count| -> i32 {
+            let data_len = self.data[src].latlng.data.len() as f32;
+            let clamp_count = if count as f32 > data_len {data_len} else {count as f32};
+
+            (100.0 * (clamp_count / data_len)) as i32
+        };
 
         act_to_act_points.iter().for_each(|(src, dest_map)| {
             dest_map.iter().for_each(|(dest, count)| {
-                results.push(((100.0 * (*count as f32 / self.data[src].latlng.data.len() as f32)) as i32, *src, *dest));
-                results.push(((100.0 * (*count as f32 / self.data[dest].latlng.data.len() as f32)) as i32, *dest, *src));
+                results.push((compute_match_percent(src, *count), *src, *dest));
+                results.push((compute_match_percent(dest, *count), *dest, *src));
             })
         });
 
         results.sort_by_key(|k| std::cmp::Reverse(100 * k.0 as i32));
 
-        for res in results {
-            println!("{}% {} {}", res.0, res.1, res.2);
+        let merge_result = self.merge_results(&results);
+
+        merge_result.iter().for_each(|v| println!("{:?}", v));
+
+        merge_result
+    }
+
+    fn merge_results(&self, results: &Vec<Telem2TelemMatchResult>) -> MatchedTelemetriesResult {
+        let mut merge_result : MatchedTelemetriesResult = Vec::new();
+
+        for two_telem_result in results {
+            if two_telem_result.0 < MATCH_THRESHOLD {
+                continue;
+            }
+
+            let mut group_found = false;
+
+            for match_group in merge_result.iter_mut() {
+                if match_group.contains(&two_telem_result.1) || match_group.contains(&two_telem_result.2) {
+                    group_found = true;
+
+                    match_group.insert(two_telem_result.1);
+                    match_group.insert(two_telem_result.2);
+                }
+            }
+
+            if !group_found {
+                merge_result.push(HashSet::from([two_telem_result.1, two_telem_result.2]));
+            }
         }
+
+        merge_result
     }
 
     fn reduce_accuracy(value: f32) -> u32 {
