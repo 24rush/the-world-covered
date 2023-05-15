@@ -2,10 +2,10 @@ use std::{
     collections::{HashMap, HashSet}, io::Write
 };
 
-use crate::data_types::{
+use crate::{data_types::{
     common::Identifiable,
     telemetry::{Telemetry, TelemetryId},
-};
+}, logln, logsl};
 
 type LatLngReduced = u32;
 type Telem2TelemMatchResult = (i32, TelemetryId, TelemetryId);
@@ -32,6 +32,8 @@ pub struct Commonality<'a> {
 }
 
 impl<'a> Commonality<'a> {
+    const CC: &str = "Commonality";
+
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
@@ -40,7 +42,7 @@ impl<'a> Commonality<'a> {
 
     pub fn set_data(&mut self, data: Vec<&'a Telemetry>) {
         data.iter().for_each(|v| {
-            self.data.insert(v.id(), v);
+            self.data.insert(v.as_i64(), v);
         });
     }
 
@@ -51,15 +53,16 @@ impl<'a> Commonality<'a> {
         let mut act_to_act_points: HashMap<TelemetryId, HashMap<TelemetryId, u32>> = HashMap::new();
 
         let mut act_count_processed = 1.0;
-
+        let mut points_total = 0;
         for (_, telemetry_ref) in &self.data {
-            let act_id = telemetry_ref.id();
-                    
-            print!("\rProcessing {:.0}%", 100.0 * act_count_processed / (self.data.len() as f32));
+            let act_id = telemetry_ref.as_i64();
+
+            logsl!("Processing {:.0}%", 100.0 * act_count_processed / (self.data.len() as f32));
             std::io::stdout().flush().unwrap();
             act_count_processed += 1.0;
 
             for latlngs in &telemetry_ref.latlng.data {
+                points_total += 1;
                 let lat = latlngs[0];
                 let long = latlngs[1];
 
@@ -97,7 +100,7 @@ impl<'a> Commonality<'a> {
             }
         }
 
-        print!("\r");
+        logln!("Processed {} points", points_total);
 
         let mut results : Vec<Telem2TelemMatchResult> = Vec::new();
 
@@ -119,7 +122,7 @@ impl<'a> Commonality<'a> {
 
         let merge_result = self.merge_results(&results);
 
-        merge_result.iter().for_each(|v| println!("{:?}", v));
+        merge_result.iter().for_each(|v| logln!("{:?}", v));
 
         merge_result
     }

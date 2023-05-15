@@ -9,10 +9,9 @@ fn main() {
     }
 
     let _athlete_data = app.get_athlete_data(current_athlete_id).unwrap();
-    //println!("AthleteData: {:#?}", athlete_data);
     
     //app.perform_db_integrity_check();
-    
+
     app.test()
     
 }

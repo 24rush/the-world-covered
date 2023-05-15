@@ -2,6 +2,7 @@ use serde_json::Value;
 use curl::easy::{Easy, List};
 
 use crate::data_types::athlete::AthleteTokens;
+use crate::logvbln;
 use crate::strava::auth::StravaAuth;
 
 const STRAVA_BASE_URL: &str = "https://www.strava.com/api/v3/";
@@ -11,6 +12,8 @@ pub struct StravaApi {
 }
 
 impl StravaApi {
+    const CC: &str = "StravaAPI";
+    
     pub fn get_refreshed_tokens(
         client_id: &str,
         client_secret: &str,
@@ -46,7 +49,7 @@ impl StravaApi {
         drop(transfer);
 
         let s = std::str::from_utf8(&buffer_response);
-        println!("{:?}", s);
+        logvbln!("{:?}", s);
 
         let new_tokens: AthleteTokens = serde_json::from_str(s.unwrap()).unwrap();
         tokens.access_token = new_tokens.access_token;
@@ -80,7 +83,6 @@ impl StravaApi {
         drop(transfer);
 
         let s = std::str::from_utf8(&buffer_response);
-        //println!("{}", s.unwrap());
 
         let result = serde_json::from_str(s.unwrap());
 

@@ -1,4 +1,4 @@
 
 pub trait Identifiable {
-    fn id(&self) -> i64;
+    fn as_i64(&self) -> i64;
 } 

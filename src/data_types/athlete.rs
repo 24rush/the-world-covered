@@ -53,7 +53,7 @@ impl AthleteData {
 }
 
 impl Identifiable for AthleteData {
-    fn id(&self) -> i64 {
+    fn as_i64(&self) -> i64 {
         self._id
     }
 }

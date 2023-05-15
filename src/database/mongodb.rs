@@ -100,7 +100,7 @@ impl MongoConnection {
         T: Identifiable,
     {
         let res = collection
-            .replace_one(doc! {"_id": doc.id()}, doc, None)
+            .replace_one(doc! {"_id": doc.as_i64()}, doc, None)
             .unwrap();
 
         Some(res.modified_count > 0)

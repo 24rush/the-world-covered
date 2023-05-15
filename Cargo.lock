@@ -467,6 +467,7 @@ dependencies = [
  "chrono",
  "curl",
  "mongodb",
+ "once_cell",
  "petgraph",
  "serde",
  "serde_derive",

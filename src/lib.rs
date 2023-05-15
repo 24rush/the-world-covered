@@ -7,7 +7,7 @@ use serde_json::json;
 use strava::api::StravaApi;
 
 use crate::{
-    data_types::common::Identifiable, database::persistance::ResourceType, util::DateTimeUtils,
+    database::persistance::ResourceType, util::{DateTimeUtils, logging},
 };
 
 mod data_types;
@@ -31,14 +31,17 @@ struct UtilitiesContext<'a> {
 struct Utilities {}
 
 impl Utilities {
+    const CC: &str = "Util";
+
     pub fn sync_athlete_activities(ctx: &UtilitiesContext, id: i64) {
         // Sync =
         // all activities from 0 to before_ts (if before_ts is not 0)
         //  +
-        // all activities from after_ts to current timestamp (if interval passed and first stage is completed)
-
+        // all activities from after_ts to current timestamp (if interval passed and first stage is completed)        
         let athlete_data = ctx.persistance.get_athlete_data(id).unwrap();
         let (after_ts, before_ts) = (athlete_data.after_ts, athlete_data.before_ts);
+
+        logvbln!("sync_athlete_activities {} {}", before_ts, after_ts);
 
         if before_ts != 0 && after_ts != before_ts {
             if let (last_activity_ts, false) =
@@ -62,6 +65,8 @@ impl Utilities {
                 }
             }
         }
+
+        logvbln!("done syncing.");
     }
 
     fn download_activities_in_range(
@@ -70,7 +75,7 @@ impl Utilities {
         after_ts: i64,
         before_ts: i64,
     ) -> (i64, bool) {
-        println!(
+        logln!(
             "download from {} to {}",
             DateTimeUtils::timestamp_to_str(after_ts),
             DateTimeUtils::timestamp_to_str(before_ts)
@@ -104,7 +109,7 @@ impl Utilities {
                         .persistance
                         .exists_resource(ResourceType::Activity, act_id)
                     {
-                        println!("Activity {} already in DB. Skipping download.", act_id);
+                        logvbln!("Activity {} already in DB. Skipping download.", act_id);
 
                         continue;
                     }
@@ -118,7 +123,7 @@ impl Utilities {
                     }
                 }
             } else {
-                println!("No activities in range.")
+                logln!("No activities in range.")
             }
 
             if !has_more_items {
@@ -133,30 +138,30 @@ impl Utilities {
 }
 
 impl App {
+    const CC: &str = "App";
+
     pub fn test(&self) {
         let telemetries = self.persistance.get_telemetry(self.loggedin_athlete_id);
 
         let mut processor = Commonality::new();
         let mut vec_data : Vec<Telemetry> =  Vec::new();
     
-        let items_to_process = 1500;
+        let items_to_process = 5;
         for telemetry in telemetries {            
             vec_data.push(telemetry.unwrap());
-
-            print!("\rPushed {}", vec_data.len());
-            std::io::Write::flush(&mut std::io::stdout()).unwrap();
             
             if vec_data.len() >= items_to_process {
                 break;
             }
         }      
-        print!("\r");
 
         processor.set_data(vec_data.iter().map(|v| v).collect());
         processor.execute();
     }
 
     pub fn new(id: i64) -> Self {
+        logging::set_global_level(logging::LogLevel::VERBOSE);
+
         let strava_api = StravaApi::authenticate_athlete(id);
         let persistance = Persistance::new();
 
@@ -183,7 +188,7 @@ impl App {
     }
 
     pub fn store_athlete_activity(&self, act_id: i64) {
-        println!("Downloading activity: {}", act_id);
+        logln!("Downloading activity: {}", act_id);
 
         if let Some(mut new_activity) = self.strava_api.get_activity(act_id) {
             self.persistance
@@ -200,7 +205,7 @@ impl App {
         }
 
         let options = Options {
-            skip_activity_sync: false,
+            skip_activity_sync: true,
             skip_activity_telemetry: true,
             skip_segment_caching: true,
             skip_segment_telemetry: true,
@@ -224,7 +229,7 @@ impl App {
                 .persistance
                 .get_athlete_activity_ids(self.loggedin_athlete_id)
             {
-                println!("Checking activity: {act_id}");
+                logln!("Checking activity: {}", act_id);
 
                 if !options.skip_activity_telemetry {
                     // Check telemetry for activity
@@ -234,7 +239,7 @@ impl App {
                     {
                         let act = self.persistance.get_activity(act_id).unwrap();
 
-                        println!("Downloading activity telemetry...");
+                        logln!("Downloading activity telemetry...");
                         if let Some(mut telemetry_json) =
                             self.strava_api.get_activity_telemetry(act_id)
                         {
@@ -271,7 +276,7 @@ impl App {
             }
 
             if athlete_data_touched {
-                println!("Saving athlete data...");
+                logln!("Saving athlete data...");
                 self.persistance.set_athlete_data(&athlete_data);
             }
 
@@ -286,7 +291,7 @@ impl App {
                             .persistance
                             .exists_resource(ResourceType::Segment, seg_id)
                         {
-                            println!("Downloading segment {seg_id_str}...");
+                            logln!("Downloading segment {seg_id_str}...");
                             if let Some(mut segment_json) = self.strava_api.get_segment(seg_id) {
                                 self.persistance.store_resource(
                                     ResourceType::Segment,
@@ -302,7 +307,7 @@ impl App {
                             .persistance
                             .exists_resource(ResourceType::Telemetry, seg_id)
                         {
-                            println!("Downloading segment {seg_id_str} telemetry...");
+                            logln!("Downloading segment {seg_id_str} telemetry...");
                             if let Some(mut telemetry_json) =
                                 self.strava_api.get_segment_telemetry(seg_id)
                             {

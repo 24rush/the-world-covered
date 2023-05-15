@@ -41,7 +41,7 @@ pub struct Telemetry {
 }
 
 impl Identifiable for Telemetry {
-    fn id(&self) -> i64 {
+    fn as_i64(&self) -> i64 {
         self._id as i64
     }
 }
