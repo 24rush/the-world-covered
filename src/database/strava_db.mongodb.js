@@ -9,8 +9,8 @@
 // For more documentation on playgrounds please refer to
 // https://www.mongodb.com/docs/mongodb-vscode/playgrounds/
 
-const database = 'strava_db';
-const collection = 'segments';
+const database = 'gc_db';
+const collection = 'efforts';
 
 // Create a new database.
 use(database);
@@ -18,8 +18,8 @@ use(database);
 // Create a new collection.
 //db.createCollection(collection);
 
-let res = db.activities.find({ "athlete.id": 4399230 })
-
+//db.segments.find({ "_id": {$nin: [17518981]} }).pretty()
+/*
 while (res.hasNext()) {
   var doc = res.next();
   let type = doc["type"];    

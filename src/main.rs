@@ -10,10 +10,8 @@ fn main() {
 
     let _athlete_data = app.get_athlete_data(current_athlete_id).unwrap();
     
-    //app.perform_db_integrity_check();
-
-    app.test()
-    
+    //app.perform_db_integrity_check();    
+    app.start_db_pipeline();
 }
 
 

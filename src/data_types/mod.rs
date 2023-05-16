@@ -1,4 +1,3 @@
 pub mod common;
-pub mod athlete;
-pub mod activity;
-pub mod telemetry;
+pub mod strava;
+pub mod gc;

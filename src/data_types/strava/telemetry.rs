@@ -1,9 +1,5 @@
 use serde_derive::Deserialize;
 
-use super::common::Identifiable;
-
-pub type TelemetryId = i64;
-
 type LatLng = [f32; 2];
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -40,7 +36,7 @@ pub struct Telemetry {
     pub time    : F32data,
 }
 
-impl Identifiable for Telemetry {
+impl crate::data_types::common::Identifiable for Telemetry {
     fn as_i64(&self) -> i64 {
         self._id as i64
     }

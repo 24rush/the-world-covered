@@ -15,11 +15,11 @@ pub struct MongoConnection {
 }
 
 impl MongoConnection {
-    pub fn new() -> Self {
+    pub fn new(db: &'static str) -> Self {
         Self {
             database: Client::with_uri_str("mongodb://localhost:27017")
                 .unwrap()
-                .database("strava_db"),
+                .database(db),
         }
     }
 
@@ -100,10 +100,24 @@ impl MongoConnection {
         T: Identifiable,
     {
         let res = collection
-            .replace_one(doc! {"_id": doc.as_i64()}, doc, None)
+            .replace_one(doc! {"_id": doc.as_i64()}, doc, ReplaceOptions::builder().upsert(true).build())
             .unwrap();
 
         Some(res.modified_count > 0)
+    }
+
+    pub fn remove_all<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
+        &self,
+        collection: &Collection<T>,        
+    ) -> Option<bool>
+    where
+        T: Identifiable,
+    {
+        let res = collection
+            .delete_many(doc! {}, None)
+            .unwrap();
+
+        Some(res.deleted_count > 0)
     }
 
     pub fn update_field<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(

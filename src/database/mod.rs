@@ -1,4 +1,5 @@
 pub (crate) mod mongodb;
 
-pub mod persistance;
+pub mod strava_db;
+pub mod gc_db;
 pub mod cursors;

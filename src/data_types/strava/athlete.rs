@@ -3,7 +3,7 @@ use std::{collections::HashMap};
 use chrono::Utc;
 use serde_derive::{Deserialize, Serialize};
 
-use super::common::Identifiable;
+pub type AthleteId = i64;
 
 #[derive(Deserialize, Debug, Serialize, Clone)]
 pub struct SegmentVisitedData {
@@ -12,7 +12,7 @@ pub struct SegmentVisitedData {
 
 #[derive(Deserialize, Debug, Serialize, Clone)]
 pub struct AthleteData {    
-    pub _id: i64,
+    pub _id: AthleteId,
     pub tokens: AthleteTokens,
     pub before_ts: i64,
     pub after_ts: i64,
@@ -52,7 +52,7 @@ impl AthleteData {
     }
 }
 
-impl Identifiable for AthleteData {
+impl crate::data_types::common::Identifiable for AthleteData {
     fn as_i64(&self) -> i64 {
         self._id
     }

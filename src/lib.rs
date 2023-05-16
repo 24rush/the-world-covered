@@ -1,13 +1,14 @@
 use chrono::Utc;
-use data_types::{activity::Activity, athlete::AthleteData, telemetry::Telemetry};
-use database::persistance::Persistance;
+use data_types::strava::{activity::Activity, athlete::{AthleteData, AthleteId}};
+use database::{strava_db::StravaDB, gc_db::GCDB};
 
-use processors::commonality::Commonality;
+use processors::Pipeline;
 use serde_json::json;
 use strava::api::StravaApi;
 
 use crate::{
-    database::persistance::ResourceType, util::{DateTimeUtils, logging},
+    database::strava_db::ResourceType,
+    util::{logging, DateTimeUtils},
 };
 
 mod data_types;
@@ -18,14 +19,15 @@ mod util;
 mod processors;
 
 pub struct App {
-    loggedin_athlete_id: i64,
+    loggedin_athlete_id: AthleteId,
     strava_api: StravaApi,
-    persistance: Persistance,
+    strava_db: StravaDB,
+    gc_db: GCDB
 }
 
 struct UtilitiesContext<'a> {
     strava_api: &'a StravaApi,
-    persistance: &'a Persistance,
+    persistance: &'a StravaDB,
 }
 
 struct Utilities {}
@@ -37,7 +39,7 @@ impl Utilities {
         // Sync =
         // all activities from 0 to before_ts (if before_ts is not 0)
         //  +
-        // all activities from after_ts to current timestamp (if interval passed and first stage is completed)        
+        // all activities from after_ts to current timestamp (if interval passed and first stage is completed)
         let athlete_data = ctx.persistance.get_athlete_data(id).unwrap();
         let (after_ts, before_ts) = (athlete_data.after_ts, athlete_data.before_ts);
 
@@ -140,49 +142,30 @@ impl Utilities {
 impl App {
     const CC: &str = "App";
 
-    pub fn test(&self) {
-        let telemetries = self.persistance.get_telemetry(self.loggedin_athlete_id);
-
-        let mut processor = Commonality::new();
-        let mut vec_data : Vec<Telemetry> =  Vec::new();
-    
-        let items_to_process = 5;
-        for telemetry in telemetries {            
-            vec_data.push(telemetry.unwrap());
-            
-            if vec_data.len() >= items_to_process {
-                break;
-            }
-        }      
-
-        processor.set_data(vec_data.iter().map(|v| v).collect());
-        processor.execute();
-    }
-
-    pub fn new(id: i64) -> Self {
+    pub fn new(id: AthleteId) -> Self {
         logging::set_global_level(logging::LogLevel::VERBOSE);
 
         let strava_api = StravaApi::authenticate_athlete(id);
-        let persistance = Persistance::new();
 
         Self {
             loggedin_athlete_id: id,
             strava_api,
-            persistance,
+            strava_db: StravaDB::new(),
+            gc_db: GCDB::new()
         }
     }
-
+    
     pub fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
-        self.persistance.get_athlete_data(id)
+        self.strava_db.get_athlete_data(id)
     }
 
     pub fn get_activity(&self, id: i64) -> Option<Activity> {
-        self.persistance.get_activity(id)
+        self.strava_db.get_activity(id)
     }
 
     pub fn create_athlete(&self, id: i64) -> AthleteData {
         let default_athlete = AthleteData::new(id);
-        self.persistance.set_athlete_data(&default_athlete);
+        self.strava_db.set_athlete_data(&default_athlete);
 
         default_athlete
     }
@@ -191,11 +174,15 @@ impl App {
         logln!("Downloading activity: {}", act_id);
 
         if let Some(mut new_activity) = self.strava_api.get_activity(act_id) {
-            self.persistance
+            self.strava_db
                 .store_resource(ResourceType::Activity, act_id, &mut new_activity);
         }
     }
 
+    pub fn start_db_pipeline(&self) {
+        Pipeline::start(self.loggedin_athlete_id, &self.strava_db, &self.gc_db);
+    }
+    
     pub fn perform_db_integrity_check(&self) {
         struct Options {
             skip_activity_sync: bool,
@@ -207,7 +194,7 @@ impl App {
         let options = Options {
             skip_activity_sync: true,
             skip_activity_telemetry: true,
-            skip_segment_caching: true,
+            skip_segment_caching: false,
             skip_segment_telemetry: true,
         };
 
@@ -215,7 +202,7 @@ impl App {
 
         let utilities_ctx = UtilitiesContext {
             strava_api: &self.strava_api,
-            persistance: &self.persistance,
+            persistance: &self.strava_db,
         };
 
         if !options.skip_activity_sync {
@@ -226,7 +213,7 @@ impl App {
             let mut athlete_data_touched = false;
 
             for act_id in self
-                .persistance
+                .strava_db
                 .get_athlete_activity_ids(self.loggedin_athlete_id)
             {
                 logln!("Checking activity: {}", act_id);
@@ -234,10 +221,10 @@ impl App {
                 if !options.skip_activity_telemetry {
                     // Check telemetry for activity
                     if !self
-                        .persistance
+                        .strava_db
                         .exists_resource(ResourceType::Telemetry, act_id)
                     {
-                        let act = self.persistance.get_activity(act_id).unwrap();
+                        let act = self.strava_db.get_activity(act_id).unwrap();
 
                         logln!("Downloading activity telemetry...");
                         if let Some(mut telemetry_json) =
@@ -248,14 +235,11 @@ impl App {
                                 "athlete".to_string(),
                                 json!({"id" : self.loggedin_athlete_id}),
                             );
-                            m.insert(
-                                "type".to_string(),
-                                serde_json::Value::String(act.r#type),
-                            );
+                            m.insert("type".to_string(), serde_json::Value::String(act.r#type));
 
                             telemetry_json = serde_json::Value::Object(m);
 
-                            self.persistance.store_resource(
+                            self.strava_db.store_resource(
                                 ResourceType::Telemetry,
                                 act_id,
                                 &mut telemetry_json,
@@ -265,7 +249,7 @@ impl App {
                 }
 
                 // Go over segment efforts, pickup all the segments ids and add them to the user's visited
-                if let Some(activity) = self.persistance.get_activity(act_id) {
+                if let Some(activity) = self.strava_db.get_activity(act_id) {
                     for effort in activity.segment_efforts {
                         let seg_id = effort.segment.id;
 
@@ -277,7 +261,7 @@ impl App {
 
             if athlete_data_touched {
                 logln!("Saving athlete data...");
-                self.persistance.set_athlete_data(&athlete_data);
+                self.strava_db.set_athlete_data(&athlete_data);
             }
 
             if !options.skip_segment_caching || !options.skip_segment_telemetry {
@@ -288,12 +272,12 @@ impl App {
 
                     if !options.skip_segment_caching {
                         if !self
-                            .persistance
+                            .strava_db
                             .exists_resource(ResourceType::Segment, seg_id)
                         {
                             logln!("Downloading segment {seg_id_str}...");
                             if let Some(mut segment_json) = self.strava_api.get_segment(seg_id) {
-                                self.persistance.store_resource(
+                                self.strava_db.store_resource(
                                     ResourceType::Segment,
                                     seg_id,
                                     &mut segment_json,
@@ -304,14 +288,14 @@ impl App {
 
                     if !options.skip_segment_telemetry {
                         if !self
-                            .persistance
+                            .strava_db
                             .exists_resource(ResourceType::Telemetry, seg_id)
                         {
                             logln!("Downloading segment {seg_id_str} telemetry...");
                             if let Some(mut telemetry_json) =
                                 self.strava_api.get_segment_telemetry(seg_id)
                             {
-                                self.persistance.store_resource(
+                                self.strava_db.store_resource(
                                     ResourceType::Telemetry,
                                     seg_id,
                                     &mut telemetry_json,

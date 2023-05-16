@@ -2,7 +2,7 @@ use chrono::Utc;
 use serde_derive::Deserialize;
 use toml;
 
-use crate::{data_types::athlete::{AthleteData, AthleteTokens}, database::persistance::{Persistance}, strava::api::StravaApi, logln};
+use crate::{data_types::strava::athlete::{AthleteData, AthleteTokens}, database::strava_db::{StravaDB}, strava::api::StravaApi, logln};
 
 #[derive(Deserialize, Debug)]
 struct Secrets {
@@ -15,7 +15,7 @@ pub struct StravaAuth {
     athlete_id: i64,
     athlete_tokens: AthleteTokens,
     secrets: Secrets,
-    persistance: Persistance
+    persistance: StravaDB
 }
 
 impl StravaAuth {
@@ -58,7 +58,7 @@ impl StravaAuth {
             athlete_id,
             athlete_tokens: AthleteData::new(athlete_id).tokens,
             secrets: StravaAuth::read_secrets_from_file(),
-            persistance :Persistance::new()
+            persistance :StravaDB::new()
         };
 
         if let Some(athlete_tokens) = this.persistance.get_athlete_tokens(athlete_id) {

@@ -1,9 +1,10 @@
 use serde_json::Value;
 use curl::easy::{Easy, List};
 
-use crate::data_types::athlete::AthleteTokens;
-use crate::logvbln;
+use crate::data_types::strava::athlete::AthleteTokens;
 use crate::strava::auth::StravaAuth;
+
+use crate::logvbln;
 
 const STRAVA_BASE_URL: &str = "https://www.strava.com/api/v3/";
 
