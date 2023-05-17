@@ -194,8 +194,8 @@ impl App {
         let options = Options {
             skip_activity_sync: true,
             skip_activity_telemetry: true,
-            skip_segment_caching: false,
-            skip_segment_telemetry: true,
+            skip_segment_caching: true,
+            skip_segment_telemetry: false,
         };
 
         let mut athlete_data = self.get_athlete_data(self.loggedin_athlete_id).unwrap();
@@ -275,7 +275,7 @@ impl App {
                             .strava_db
                             .exists_resource(ResourceType::Segment, seg_id)
                         {
-                            logln!("Downloading segment {seg_id_str}...");
+                            logln!("Downloading segment {}...", seg_id_str);
                             if let Some(mut segment_json) = self.strava_api.get_segment(seg_id) {
                                 self.strava_db.store_resource(
                                     ResourceType::Segment,

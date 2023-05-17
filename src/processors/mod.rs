@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use crate::{
     data_types::{
@@ -8,9 +11,10 @@ use crate::{
     },
     database::{gc_db::GCDB, strava_db::StravaDB},
     logln,
+    util::time::Benchmark,
 };
 
-use self::commonality::{Commonality, MatchedRoutesResult};
+use self::commonality::Commonality;
 
 pub mod commonality;
 pub mod routes;
@@ -38,8 +42,8 @@ impl Pipeline {
         gc_db.clear_routes();
 
         // Run route matching module => routes collections
-        Pipeline::run_commonalities(&pipe_context);
-
+        Pipeline::run_commonalities((&pipe_context).into());
+ 
         // 2 //
         // Clear previous segments
         gc_db.clear_segments();
@@ -49,6 +53,7 @@ impl Pipeline {
     }
 
     fn run_commonalities(pipe_context: &PipelineContext) {
+        let b = Benchmark::start("th");
         let telemetries = pipe_context
             .strava_db
             .get_telemetry(pipe_context.athlete_id);
@@ -70,6 +75,8 @@ impl Pipeline {
             route.athlete_id = pipe_context.athlete_id;
             pipe_context.gc_db.update_route(route);
         });
+
+        logln!("{}", b);
     }
 
     fn run_route_processor(pipe_context: &PipelineContext, routes: mongodb::sync::Cursor<Route>) {
@@ -103,6 +110,8 @@ impl Pipeline {
                                 activity_id: effort.activity.id,
 
                                 moving_time: effort.moving_time,
+                                start_index: effort.start_index,
+                                end_index: effort.end_index,
                             })
                         });
                     }
@@ -118,12 +127,15 @@ impl Pipeline {
                         let seg_id = effort.segment.id as DocumentId;
 
                         if let Some(db_segment) = pipe_context.strava_db.get_segment(seg_id) {
-                            let new_segment = discovered_segments.entry(seg_id).or_default();
-
-                            new_segment._id = seg_id as f64;
-                            new_segment.polyline = db_segment.map.polyline;
-                            new_segment.kom = db_segment.xoms.kom;
-                            new_segment.qom = db_segment.xoms.qom;
+                            discovered_segments.insert(
+                                seg_id,
+                                Segment {
+                                    _id: seg_id as f64,
+                                    polyline: db_segment.map.polyline,
+                                    kom: db_segment.xoms.kom,
+                                    qom: db_segment.xoms.qom,
+                                },
+                            );
                         } else {
                             logln!("Cannot find segment id: {}", seg_id);
                         }

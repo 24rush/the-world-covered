@@ -2,7 +2,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::data_types::{common::{Identifiable, DocumentId}};
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Segment {
     pub _id: f64,
     pub polyline: String,

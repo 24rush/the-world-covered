@@ -1,11 +1,10 @@
-use std::{
-    collections::{HashMap, HashSet},
-};
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     data_types::{
-        common::{Identifiable, DocumentId},
-        strava::telemetry::{Telemetry}, gc::route::Route,
+        common::{DocumentId, Identifiable},
+        gc::route::Route,
+        strava::telemetry::Telemetry,
     },
     logln, logsl,
 };
@@ -51,42 +50,91 @@ impl<'a> Commonality<'a> {
     }
 
     pub fn execute(&mut self) -> MatchedTelemetriesResult {
-        let references : Vec<&Telemetry> = self.data.iter().map(|(_, refs)| *refs).collect();
+        let references: Vec<&Telemetry> = self.data.iter().map(|(_, refs)| *refs).collect();
 
         for telemetry_ref in &references {
-            self.process_telemetry_data(&telemetry_ref);
+            self.process(&telemetry_ref);
             self.act_count_processed += 1.0;
         }
-        
+
         let results = self.generate_match_results();
         self.merge_results(&results)
     }
 
     // Functions using streamed data
     pub fn process(&mut self, telemetry_ref: &Telemetry) {
-        self.process_telemetry_data(&telemetry_ref);
+        let telem_id = telemetry_ref.as_i64();
+        let telem_data_size = telemetry_ref.latlng.data.len();
 
-        self.act_count_processed += 1.0;
+        *self.data_size.entry(telem_id).or_insert(telem_data_size) = telem_data_size;
+
+        for latlngs in &telemetry_ref.latlng.data {
+            self.points_total += 1;
+            let lat = latlngs[0];
+            let long = latlngs[1];
+
+            let reduced_lat = Commonality::reduce_accuracy(lat);
+            let reduced_long = Commonality::reduce_accuracy(long);
+
+            let set_telem_ids = &mut self
+                .unique_points
+                .entry(telemetry_ref.r#type.to_string())
+                .or_default()
+                .entry(reduced_lat)
+                .or_insert(HashMap::from([(
+                    reduced_long,
+                    ActivityOccurence::default(),
+                )]))
+                .entry(reduced_long)
+                .or_default()
+                .set_activities;
+
+            set_telem_ids.insert(telem_id);
+
+            let vec_act_ids: Vec<&i64> = set_telem_ids.iter().collect();
+
+            for i in 0..vec_act_ids.len() {
+                let dest_act = *vec_act_ids[i];
+
+                if telem_id == dest_act {
+                    continue;
+                }
+
+                self.act_to_act_points
+                    .entry(telem_id)
+                    .or_insert(HashMap::from([(dest_act, 0)]))
+                    .entry(dest_act)
+                    .and_modify(|v| *v += 1);
+            }
+        }
     }
 
     pub fn end_session(&mut self) -> MatchedRoutesResult {
+        logln!("Processed {} activities", { self.act_count_processed });
+
         let results = self.generate_match_results();
         let merged_routes = self.merge_results(&results);
 
         let mut route_idx = 0;
-        merged_routes.iter().map(|result| {
-            route_idx += 1;
+        merged_routes
+            .iter()
+            .map(|result| {
+                route_idx += 1;
 
-            Route {
-                _id: route_idx as f64,
-                activities: result.iter().map(|act_id| *act_id).collect(),                
-                ..Default::default()
-            }            
-        }).collect()
+                Route {
+                    _id: route_idx as f64,
+                    activities: result.iter().map(|act_id| *act_id).collect(),
+                    athlete_id: 0,
+                    master_activity_id: 0,
+                    polyline: "".to_string(),
+                    segment_ids: Vec::new(),
+                }
+            })
+            .collect()
     }
 
     // PRIVATES
-    fn generate_match_results(&mut self) -> Vec<Telem2TelemMatchResult>{
+    fn generate_match_results(&mut self) -> Vec<Telem2TelemMatchResult> {
         let mut results: Vec<Telem2TelemMatchResult> = Vec::new();
 
         let compute_match_percent = |src, count| -> i32 {
@@ -110,52 +158,6 @@ impl<'a> Commonality<'a> {
         results.sort_by_key(|k| std::cmp::Reverse(100 * k.0 as i32));
 
         results
-    }
-
-    fn process_telemetry_data(&mut self, telemetry_ref: &Telemetry) {
-        let telem_id = telemetry_ref.as_i64();
-        let telem_data_size = telemetry_ref.latlng.data.len();
-        
-        *self.data_size.entry(telem_id).or_insert(telem_data_size) = telem_data_size;
-
-        for latlngs in &telemetry_ref.latlng.data {
-            self.points_total += 1;
-            let lat = latlngs[0];
-            let long = latlngs[1];
-
-            let reduced_lat = Commonality::reduce_accuracy(lat);
-            let reduced_long = Commonality::reduce_accuracy(long);
-
-            let set_telem_ids = &mut self
-                .unique_points
-                .entry(telemetry_ref.r#type.to_string())
-                .or_default()
-                .entry(reduced_lat)
-                .or_insert(HashMap::from([(reduced_long, ActivityOccurence::default())]))
-                .entry(reduced_long)
-                .or_default()
-                .set_activities;
-
-            set_telem_ids.insert(telem_id);
-
-            let vec_act_ids: Vec<&i64> = set_telem_ids.iter().collect();
-
-            if vec_act_ids.len() > 1 {
-                for i in 0..vec_act_ids.len() {
-                    let dest_act = *vec_act_ids[i];
-
-                    if telem_id == dest_act {
-                        continue;
-                    }
-
-                    self.act_to_act_points
-                        .entry(telem_id)
-                        .or_insert(HashMap::from([(dest_act, 0)]))
-                        .entry(dest_act)
-                        .and_modify(|v| *v += 1);
-                }
-            }
-        }
     }
 
     fn merge_results(&self, results: &Vec<Telem2TelemMatchResult>) -> MatchedTelemetriesResult {

@@ -104,6 +104,11 @@ impl StravaDB {
             .find::<Telemetry>(&self.colls.typed_telemetry, doc! {"athlete.id": ath_id})
     }
 
+    pub fn get_telemetry_by_type(&self, ath_id: i64, r#type: &str) -> mongodb::sync::Cursor<Telemetry> {
+        self.db_conn
+            .find::<Telemetry>(&self.colls.typed_telemetry, doc! {"athlete.id": ath_id, "type": r#type})
+    }
+
     pub fn get_segment(&self, seg_id: i64) -> Option<Segment> {
         self.db_conn
             .find_one::<Segment>(&self.colls.typed_segments, doc! {"_id": seg_id})

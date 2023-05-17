@@ -4,7 +4,7 @@ use crate::data_types::common::DocumentId;
 
 use super::common::{Map, ResourceId};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Effort {
     pub id: DocumentId,
     pub athlete: ResourceId,
@@ -12,9 +12,11 @@ pub struct Effort {
     pub segment: ResourceId,
 
     pub moving_time: i32,
+    pub start_index: i32,
+    pub end_index: i32
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Activity {
     pub _id: f64,
     pub distance: f32,
