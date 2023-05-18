@@ -13,7 +13,7 @@ pub struct Effort {
 
     pub moving_time: i32,
     pub start_index: i32,
-    pub end_index: i32
+    pub end_index: i32,    
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -24,6 +24,7 @@ pub struct Activity {
     pub r#type: String,
 
     pub map: Map,
+    pub total_elevation_gain: f32,
 }
 
 impl crate::data_types::common::Identifiable for Activity {

@@ -29,7 +29,7 @@ impl Benchmark {
     }
 
     pub fn benchmark<F: Fn()>(label: &'static str, f: F) {
-        let this = Benchmark::start(label);
+        Benchmark::start(label);
         {
             f();
         }

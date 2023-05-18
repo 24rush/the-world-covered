@@ -9,7 +9,9 @@ pub struct Route {
     pub activities: Vec<DocumentId>,
     pub master_activity_id: DocumentId,
     pub polyline: String,
-    pub segment_ids: Vec<DocumentId>
+    pub segment_ids: Vec<DocumentId>,
+    
+    pub climb_per_km: f32
 }
 
 impl Identifiable for Route {
