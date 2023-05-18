@@ -1,6 +1,4 @@
 use std::{collections::HashMap};
-
-use chrono::Utc;
 use serde_derive::{Deserialize, Serialize};
 
 pub type AthleteId = i64;
@@ -10,7 +8,7 @@ pub struct SegmentVisitedData {
     pub count: i32
 }
 
-#[derive(Deserialize, Debug, Serialize, Clone)]
+#[derive(Deserialize, Debug, Serialize, Clone, Default)]
 pub struct AthleteData {    
     pub _id: AthleteId,
     pub tokens: AthleteTokens,
@@ -21,7 +19,7 @@ pub struct AthleteData {
     pub segments: HashMap<String, SegmentVisitedData>
 }
 
-#[derive(Deserialize, Debug, Serialize, Clone)]
+#[derive(Deserialize, Debug, Serialize, Clone, Default)]
 pub struct AthleteTokens {
     pub access_token: String,
     pub refresh_token: String,
@@ -29,20 +27,6 @@ pub struct AthleteTokens {
 }
 
 impl AthleteData {
-    pub fn new(id: i64) -> Self {
-        Self {   
-            _id: id,         
-            before_ts: Utc::now().timestamp(),
-            after_ts: 0,
-            tokens: AthleteTokens {
-                access_token: "168f77da961a3d36941a6f63a52570f6c007ebf6".to_string(),
-                refresh_token: "1448cdba35873b1db89f6001afae1eeff6dd972a".to_string(),
-                expires_at: 0,                
-            },
-            segments: HashMap::new()
-        }
-    }
-
     pub fn incr_visited_segment(&mut self, seg_id: i64) {
         if let Some(ref mut existing_seg) = self.segments.get_mut(&seg_id.to_string()) {
             existing_seg.count += 1;

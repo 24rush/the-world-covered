@@ -1,7 +1,10 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 
-pub (crate) mod logging;
-pub (crate) mod time;
+pub mod db_integrity_checks;
+pub mod sync_from_strava;
+
+pub mod logging;
+pub mod time;
 
 pub struct DateTimeUtils {}
 

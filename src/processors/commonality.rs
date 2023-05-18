@@ -6,7 +6,7 @@ use crate::{
         gc::route::Route,
         strava::telemetry::Telemetry,
     },
-    logln, logsl,
+    logln,
 };
 
 // PUBLIC Types

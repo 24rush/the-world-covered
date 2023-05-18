@@ -1,13 +1,22 @@
-use chrono::Utc;
-use data_types::{strava::{activity::Activity, athlete::{AthleteData, AthleteId}}, gc::route::Route};
-use database::{strava_db::StravaDB, gc_db::GCDB};
+use data_types::{
+    gc::route::Route,
+    strava::{
+        activity::Activity,
+        athlete::{AthleteData, AthleteId},
+    },
+};
+use database::{gc_db::GCDB, strava_db::StravaDB};
 
 use processors::Pipeline;
 use strava::api::StravaApi;
+use util::db_integrity_checks::DBIntegrityChecker;
 
 use crate::{
     database::strava_db::ResourceType,
-    util::{logging, DateTimeUtils},
+    util::{
+        logging,
+        sync_from_strava::{UtilitiesContext},
+    },
 };
 
 mod data_types;
@@ -21,139 +30,27 @@ pub struct App {
     loggedin_athlete_id: AthleteId,
     strava_api: StravaApi,
     strava_db: StravaDB,
-    gc_db: GCDB
-}
-
-struct UtilitiesContext<'a> {
-    strava_api: &'a StravaApi,
-    persistance: &'a StravaDB,
-}
-
-struct Utilities {}
-
-impl Utilities {
-    const CC: &str = "Util";
-
-    pub async fn sync_athlete_activities(ctx: &UtilitiesContext<'_>, id: i64) {
-        // Sync =
-        // all activities from 0 to before_ts (if before_ts is not 0)
-        //  +
-        // all activities from after_ts to current timestamp (if interval passed and first stage is completed)
-        let athlete_data = ctx.persistance.get_athlete_data(id).await.unwrap();
-        let (after_ts, before_ts) = (athlete_data.after_ts, athlete_data.before_ts);
-
-        logvbln!("sync_athlete_activities {} {}", before_ts, after_ts);
-
-        if before_ts != 0 && after_ts != before_ts {
-            if let (last_activity_ts, false) =
-                Utilities::download_activities_in_range(ctx, id, 0, before_ts).await
-            {
-                // when done move before to 0 and after to last activity ts
-                ctx.persistance
-                    .save_after_before_timestamps(id, last_activity_ts, 0).await;
-            }
-        } else {
-            let current_ts: i64 = Utc::now().timestamp();
-            let days_since_last_sync = (current_ts - after_ts) / 86400;
-
-            if days_since_last_sync >= 0 {
-                if let (_, false) =
-                    Utilities::download_activities_in_range(ctx, id, after_ts, current_ts).await
-                {
-                    // when done move after to current
-                    ctx.persistance
-                        .save_after_before_timestamps(id, current_ts, current_ts).await;
-                }
-            }
-        }
-
-        logvbln!("done syncing.");
-    }
-
-    async fn download_activities_in_range(
-        ctx: &UtilitiesContext<'_>,
-        id: i64,
-        after_ts: i64,
-        before_ts: i64,
-    ) -> (i64, bool) {
-        logln!(
-            "download from {} to {}",
-            DateTimeUtils::timestamp_to_str(after_ts),
-            DateTimeUtils::timestamp_to_str(before_ts)
-        );
-
-        const ACTIVITIES_PER_PAGE: usize = 2;
-
-        let mut last_activity_ts = before_ts;
-        let mut page = 1;
-        let mut has_more_items = false;
-
-        loop {
-            if let Some(activities_list) = ctx.strava_api.list_athlete_activities(
-                after_ts,
-                before_ts,
-                ACTIVITIES_PER_PAGE,
-                page,
-            ) {
-                has_more_items = activities_list.len() == ACTIVITIES_PER_PAGE;
-
-                for activity in activities_list {
-                    let act_id = activity["id"].as_i64().unwrap();
-
-                    last_activity_ts =
-                        DateTimeUtils::zulu2ts(&activity["start_date"].as_str().unwrap());
-
-                    ctx.persistance
-                        .save_after_before_timestamps(id, after_ts, last_activity_ts).await;
-
-                    if ctx
-                        .persistance
-                        .exists_resource(ResourceType::Activity, act_id).await
-                    {
-                        logvbln!("Activity {} already in DB. Skipping download.", act_id);
-
-                        continue;
-                    }
-
-                    if let Some(mut new_activity) = ctx.strava_api.get_activity(act_id) {
-                        ctx.persistance.store_resource(
-                            ResourceType::Activity,
-                            act_id,
-                            &mut new_activity,
-                        ).await;
-                    }
-                }
-            } else {
-                logln!("No activities in range.")
-            }
-
-            if !has_more_items {
-                break;
-            }
-
-            page += 1;
-        }
-
-        (last_activity_ts, has_more_items)
-    }
+    gc_db: GCDB,
 }
 
 impl App {
     const CC: &str = "App";
 
-    pub async fn new(id: AthleteId) -> Self {
+    pub async fn new(ath_id: AthleteId) -> Option<Self> {
         logging::set_global_level(logging::LogLevel::VERBOSE);
 
-        let strava_api = StravaApi::authenticate_athlete(id).await;
-
-        Self {
-            loggedin_athlete_id: id,
-            strava_api,
-            strava_db: StravaDB::new().await,
-            gc_db: GCDB::new().await
+        if let Some(strava_api) = StravaApi::new(ath_id).await {
+            return Some(Self {
+                loggedin_athlete_id: ath_id,
+                strava_api,
+                strava_db: StravaDB::new().await,
+                gc_db: GCDB::new().await,
+            });
         }
+
+        None
     }
-    
+
     pub async fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
         self.strava_db.get_athlete_data(id).await
     }
@@ -164,7 +61,7 @@ impl App {
 
     pub async fn get_routes(&self, ath_id: AthleteId) -> Vec<Route> {
         let mut cursor_routes = self.gc_db.get_routes(ath_id).await;
-        let mut routes : Vec<Route>= Vec::new();
+        let mut routes: Vec<Route> = Vec::new();
 
         while cursor_routes.advance().await.unwrap() {
             routes.push(cursor_routes.deserialize_current().unwrap())
@@ -174,147 +71,40 @@ impl App {
     }
 
     pub async fn create_athlete(&self, id: i64) -> AthleteData {
-        let default_athlete = AthleteData::new(id);
+        let mut default_athlete: AthleteData = Default::default();
+        default_athlete._id = id;
         self.strava_db.set_athlete_data(&default_athlete).await;
 
         default_athlete
     }
 
-    pub async fn store_athlete_activity(&self, act_id: i64) {
+    pub async fn store_athlete_activity(&mut self, act_id: i64) {
         logln!("Downloading activity: {}", act_id);
 
-        if let Some(mut new_activity) = self.strava_api.get_activity(act_id) {
+        if let Some(mut new_activity) = self.strava_api.get_activity(act_id).await {
             self.strava_db
-                .store_resource(ResourceType::Activity, act_id, &mut new_activity).await;
+                .store_resource(ResourceType::Activity, act_id, &mut new_activity)
+                .await;
         }
     }
 
     pub async fn start_db_pipeline(&self) {
         Pipeline::start(self.loggedin_athlete_id, &self.strava_db, &self.gc_db).await;
     }
-    
-    pub async fn perform_db_integrity_check(&self) {
-        struct Options {
-            skip_activity_sync: bool,
-            skip_activity_telemetry: bool,
-            skip_segment_caching: bool,
-            skip_segment_telemetry: bool,
-        }
 
-        let options = Options {
+    pub async fn perform_db_integrity_check(&mut self) {
+        let options = util::db_integrity_checks::Options {
             skip_activity_sync: true,
             skip_activity_telemetry: true,
             skip_segment_caching: false,
             skip_segment_telemetry: true,
         };
 
-        let mut athlete_data = self.get_athlete_data(self.loggedin_athlete_id).await.unwrap();
-
-        let utilities_ctx = UtilitiesContext {
-            strava_api: &self.strava_api,
+        let mut utilities_ctx = UtilitiesContext {
+            strava_api: &mut self.strava_api,
             persistance: &self.strava_db,
         };
 
-        if !options.skip_activity_sync {
-            Utilities::sync_athlete_activities(&utilities_ctx, self.loggedin_athlete_id).await;
-        }
-
-        if !options.skip_activity_telemetry || !options.skip_segment_caching {
-            let mut athlete_data_touched = false;
- 
-            for act_id in self
-                .strava_db
-                .get_athlete_activity_ids(self.loggedin_athlete_id).await
-            {
-                logln!("Checking activity: {}", act_id);
-
-                if !options.skip_activity_telemetry {
-                    // Check telemetry for activity
-                    if !self
-                        .strava_db
-                        .exists_resource(ResourceType::Telemetry, act_id).await
-                    {
-                        let act = self.strava_db.get_activity(act_id).await.unwrap();
-
-                        logln!("Downloading activity telemetry...");
-                        if let Some(mut telemetry_json) =
-                            self.strava_api.get_activity_telemetry(act_id)
-                        {
-                            let mut m = telemetry_json.as_object().unwrap().clone();
-                            m.insert(
-                                "athlete".to_string(),
-                                serde_json::json!({"id" : self.loggedin_athlete_id}),
-                            );
-                            m.insert("type".to_string(), serde_json::Value::String(act.r#type));
-
-                            telemetry_json = serde_json::Value::Object(m);
-
-                            self.strava_db.store_resource(
-                                ResourceType::Telemetry,
-                                act_id,
-                                &mut telemetry_json,
-                            ).await;
-                        }
-                    }
-                }
-
-                // Go over segment efforts, pickup all the segments ids and add them to the user's visited
-                if let Some(activity) = self.strava_db.get_activity(act_id).await {
-                    for effort in activity.segment_efforts {
-                        let seg_id = effort.segment.id;
-
-                        athlete_data.incr_visited_segment(seg_id);
-                        athlete_data_touched = true;
-                    }
-                }
-            }
-
-            if athlete_data_touched {
-                logln!("Saving athlete data...");
-                self.strava_db.set_athlete_data(&athlete_data).await;
-            }
-
-            if !options.skip_segment_caching || !options.skip_segment_telemetry {
-                let athlete_segments = &athlete_data.segments;
-
-                for (seg_id_str, _) in athlete_segments {
-                    let seg_id = seg_id_str.parse().unwrap();
-
-                    if !options.skip_segment_caching {
-                        if !self
-                            .strava_db
-                            .exists_resource(ResourceType::Segment, seg_id).await
-                        {
-                            logln!("Downloading segment {}...", seg_id_str);
-                            if let Some(mut segment_json) = self.strava_api.get_segment(seg_id) {
-                                self.strava_db.store_resource(
-                                    ResourceType::Segment,
-                                    seg_id,
-                                    &mut segment_json,
-                                ).await;
-                            }
-                        }
-                    }
-
-                    if !options.skip_segment_telemetry {
-                        if !self
-                            .strava_db
-                            .exists_resource(ResourceType::Telemetry, seg_id).await
-                        {
-                            logln!("Downloading segment {} telemetry...", seg_id_str);
-                            if let Some(mut telemetry_json) =
-                                self.strava_api.get_segment_telemetry(seg_id)
-                            {
-                                self.strava_db.store_resource(
-                                    ResourceType::Telemetry,
-                                    seg_id,
-                                    &mut telemetry_json,
-                                ).await;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        DBIntegrityChecker::perform_db_integrity_check(self.loggedin_athlete_id, &options, &mut utilities_ctx).await;
     }
 }

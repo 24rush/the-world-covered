@@ -1,7 +1,8 @@
 use ground_covered::App;
-use rocket::http::{Status, ContentType};
+use rocket::http::{ContentType, Status};
 
-#[macro_use] extern crate rocket;
+#[macro_use]
+extern crate rocket;
 
 /*
 fn main() {
@@ -13,8 +14,8 @@ fn main() {
     }
 
     let _athlete_data = app.get_athlete_data(current_athlete_id).unwrap();
-    
-    //app.perform_db_integrity_check();    
+
+    //app.perform_db_integrity_check();
     app.start_db_pipeline();
 }
 */
@@ -22,12 +23,15 @@ fn main() {
 #[get("/routes/<athlete_id>")]
 async fn routes(athlete_id: &str) -> (Status, (ContentType, String)) {
     if let Ok(ath_id) = athlete_id.parse::<i64>() {
-        let app = App::new(ath_id).await;
+        if let Some(app) = App::new(ath_id).await {
+            if let Some(_) = app.get_athlete_data(ath_id).await {
+                let routes = app.get_routes(ath_id).await;
 
-        if let Some(_) = app.get_athlete_data(ath_id).await {
-            let routes = app.get_routes(ath_id).await;
-
-            return (Status::Ok, (ContentType::JSON, serde_json::to_string(&routes).unwrap()))
+                return (
+                    Status::Ok,
+                    (ContentType::JSON, serde_json::to_string(&routes).unwrap()),
+                );
+            }
         }
     }
 

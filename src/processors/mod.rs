@@ -6,7 +6,7 @@ use crate::{
     data_types::{
         common::DocumentId,
         gc::{effort::Effort, route::Route, segment::Segment},
-        strava::{athlete::AthleteId, telemetry::Telemetry},
+        strava::{athlete::AthleteId},
     },
     database::{gc_db::GCDB, strava_db::StravaDB},
     logln,
