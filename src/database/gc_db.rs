@@ -1,6 +1,6 @@
-use mongodb::{sync::Collection, bson::doc};
+use mongodb::{Collection, bson::doc};
 
-use crate::data_types::gc::{route::Route, segment::{Segment, self}, effort::Effort};
+use crate::data_types::gc::{route::Route, segment::{Segment}, effort::Effort};
 
 use super::mongodb::MongoConnection;
 
@@ -16,8 +16,8 @@ pub struct GCDB {
 }
 
 impl GCDB {
-    pub fn new() -> Self {
-        let mongo_conn = MongoConnection::new("gc_db");
+    pub async fn new() -> Self {
+        let mongo_conn = MongoConnection::new("gc_db").await;
         let routes: Collection<Route> = mongo_conn.collection("routes");
         let segments: Collection<Segment> = mongo_conn.collection("segments");
         let efforts: Collection<Effort> = mongo_conn.collection("efforts");
@@ -28,28 +28,28 @@ impl GCDB {
         }
     }
 
-    pub fn clear_routes(&self) {
-        self.db_conn.remove_all(&self.colls.routes);
+    pub async fn clear_routes(&self) {
+        self.db_conn.remove_all(&self.colls.routes).await;
     }
 
-    pub fn clear_segments(&self) {
-        self.db_conn.remove_all(&self.colls.segments);
+    pub async fn clear_segments(&self) {
+        self.db_conn.remove_all(&self.colls.segments).await;
     }
 
-    pub fn update_segment(&self, segment: &Segment) {
-        self.db_conn.upsert_one(&self.colls.segments, segment);
+    pub async fn update_segment(&self, segment: &Segment) {
+        self.db_conn.upsert_one(&self.colls.segments, segment).await;
     }
 
-    pub fn update_effort(&self, effort: &Effort) {
-        self.db_conn.upsert_one(&self.colls.efforts, effort);
+    pub async fn update_effort(&self, effort: &Effort) {
+        self.db_conn.upsert_one(&self.colls.efforts, effort).await;
     }
 
-    pub fn update_route(&self, route: &Route) {
-        self.db_conn.upsert_one(&self.colls.routes, route);
+    pub async fn update_route(&self, route: &Route) {
+        self.db_conn.upsert_one(&self.colls.routes, route).await;
     }
 
-    pub fn get_routes(&self, ath_id: i64) -> mongodb::sync::Cursor<Route> {
+    pub async fn get_routes(&self, ath_id: i64) -> mongodb::Cursor<Route> {
         self.db_conn
-            .find::<Route>(&self.colls.routes, doc! {"athlete_id": ath_id})
+            .find::<Route>(&self.colls.routes, doc! {"athlete_id": ath_id}).await
     }
 }

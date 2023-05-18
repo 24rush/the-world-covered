@@ -35,7 +35,7 @@ impl StravaAuth {
         toml::from_str(&secrets_content).unwrap()
     }
 
-    fn refresh_tokens_if_expired(&mut self) {
+    async fn refresh_tokens_if_expired(&mut self) {
         let current_ts: i64 = Utc::now().timestamp();
 
         if current_ts > self.athlete_tokens.expires_at as i64 {
@@ -48,23 +48,23 @@ impl StravaAuth {
                 &mut self.athlete_tokens,
             );
 
-            self.persistance.set_athlete_tokens(self.athlete_id, &self.athlete_tokens);
+            self.persistance.set_athlete_tokens(self.athlete_id, &self.athlete_tokens).await;
         }
     }
 
-    pub fn new(athlete_id: i64) -> Self {        
+    pub async fn new(athlete_id: i64) -> Self {        
         // Start with defaults
         let mut this = Self {
             athlete_id,
             athlete_tokens: AthleteData::new(athlete_id).tokens,
             secrets: StravaAuth::read_secrets_from_file(),
-            persistance :StravaDB::new()
+            persistance :StravaDB::new().await
         };
 
-        if let Some(athlete_tokens) = this.persistance.get_athlete_tokens(athlete_id) {
+        if let Some(athlete_tokens) = this.persistance.get_athlete_tokens(athlete_id).await {
             this.athlete_tokens = athlete_tokens;
             
-            StravaAuth::refresh_tokens_if_expired(&mut this);
+            StravaAuth::refresh_tokens_if_expired(&mut this).await;
         }        
 
         logln!(

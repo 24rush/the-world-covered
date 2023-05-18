@@ -104,9 +104,9 @@ impl StravaApi {
         }
     }
 
-    pub fn authenticate_athlete(athlete_id: i64) -> Self {        
+    pub async fn authenticate_athlete(athlete_id: i64) -> Self {        
         Self {    
-            auth : StravaAuth::new(athlete_id),            
+            auth : StravaAuth::new(athlete_id).await,            
         }
     }
 

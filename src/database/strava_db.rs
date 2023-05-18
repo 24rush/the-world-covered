@@ -1,6 +1,6 @@
+use futures_util::{TryStreamExt};
 use mongodb::{
-    bson::{self, doc},
-    sync::Collection,
+    bson::{self, doc}, Collection,
 };
 
 use crate::data_types::{strava:: {
@@ -9,7 +9,7 @@ use crate::data_types::{strava:: {
     telemetry::Telemetry, segment::Segment,
 }, common::DocumentId};
 
-use super::{cursors::I64Cursor, mongodb::MongoConnection};
+use super::{mongodb::MongoConnection};
 
 struct StravaCollections {
     typed_athletes: Collection<AthleteData>,
@@ -36,8 +36,8 @@ pub struct StravaDB {
 }
 
 impl StravaDB {
-    pub fn new() -> Self {
-        let mongo_conn = MongoConnection::new("strava_db");
+    pub async fn new() -> Self {
+        let mongo_conn = MongoConnection::new("strava_db").await;
 
         let typed_athletes: Collection<AthleteData> = mongo_conn.collection("athletes");
 
@@ -69,92 +69,104 @@ impl StravaDB {
         }
     }
 
-    pub fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
+    pub async fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
         self.db_conn
-            .find_one(&self.colls.typed_athletes, doc! {"_id": id})
+            .find_one(&self.colls.typed_athletes, doc! {"_id": id}).await
     }
 
-    pub fn get_activity(&self, id: i64) -> Option<Activity> {
+    pub async fn get_activity(&self, id: i64) -> Option<Activity> {
         self.db_conn
-            .find_one(&self.colls.typed_activities, doc! {"_id": id})
+            .find_one(&self.colls.typed_activities, doc! {"_id": id}).await
     }
 
-    pub fn get_athlete_activity_ids(&self, _id: i64) -> I64Cursor {
-        self.db_conn
-            .keys_id::<bson::Document>(&self.colls.docs_activities)
+    pub async fn get_athlete_activity_ids(&self, ath_id: i64) -> Vec<DocumentId> {
+        let mut cursor = self.db_conn
+            .find(&self.colls.typed_activities, doc! {"athlete.id": ath_id}).await;
+
+        let mut act_ids : Vec<DocumentId> = Vec::new();
+
+        while let Some(act) = cursor.try_next().await.unwrap() {
+            act_ids.push(act._id as i64);
+        }
+
+        act_ids
     }
 
-    pub fn get_athlete_activities(&self, ath_id: i64) -> mongodb::sync::Cursor<Activity> {
+    pub async fn get_athlete_activities(&self, ath_id: i64) -> mongodb::Cursor<Activity> {
         self.db_conn
-            .find::<Activity>(&self.colls.typed_activities, doc! {"athlete.id": ath_id})
+            .find::<Activity>(&self.colls.typed_activities, doc! {"athlete.id": ath_id}).await
     }
     
-    pub fn get_athlete_activities_with_ids(&self, ath_id: i64, ids: &Vec<DocumentId>) -> mongodb::sync::Cursor<Activity> {
+    pub async fn get_athlete_activities_with_ids(&self, ath_id: i64, ids: &Vec<DocumentId>) -> mongodb::Cursor<Activity> {
         self.db_conn
-            .find::<Activity>(&self.colls.typed_activities, doc! {"athlete.id": ath_id, "_id": {"$in": ids}})
+            .find::<Activity>(&self.colls.typed_activities, doc! {"athlete.id": ath_id, "_id": {"$in": ids}}).await
     }
     
-    pub fn get_telemetry_by_id(&self, id: i64) -> Option<Telemetry> {
+    pub async fn get_telemetry_by_id(&self, id: i64) -> Option<Telemetry> {
         self.db_conn
-            .find_one(&self.colls.typed_telemetry, doc! {"_id": id})
+            .find_one(&self.colls.typed_telemetry, doc! {"_id": id}).await
     }
 
-    pub fn get_telemetry(&self, ath_id: i64) -> mongodb::sync::Cursor<Telemetry> {
+    pub async fn get_telemetry(&self, ath_id: i64) -> mongodb::Cursor<Telemetry> {
         self.db_conn
-            .find::<Telemetry>(&self.colls.typed_telemetry, doc! {"athlete.id": ath_id})
+            .find::<Telemetry>(&self.colls.typed_telemetry, doc! {"athlete.id": ath_id}).await
     }
 
-    pub fn get_telemetry_by_type(&self, ath_id: i64, r#type: &str) -> mongodb::sync::Cursor<Telemetry> {
+    pub async fn get_telemetry_by_type(&self, ath_id: i64, r#type: &str) -> mongodb::Cursor<Telemetry> {
         self.db_conn
-            .find::<Telemetry>(&self.colls.typed_telemetry, doc! {"athlete.id": ath_id, "type": r#type})
+            .find::<Telemetry>(&self.colls.typed_telemetry, doc! {"athlete.id": ath_id, "type": r#type}).await
     }
 
-    pub fn get_segment(&self, seg_id: i64) -> Option<Segment> {
+    pub async fn get_segment(&self, seg_id: i64) -> Option<Segment> {
         self.db_conn
-            .find_one::<Segment>(&self.colls.typed_segments, doc! {"_id": seg_id})
+            .find_one::<Segment>(&self.colls.typed_segments, doc! {"_id": seg_id}).await
     }
 
-    pub fn exists_resource(&self, res_type: ResourceType, res_id: i64) -> bool {
+    pub async fn exists_resource(&self, res_type: ResourceType, res_id: i64) -> bool {
         match res_type {
-            ResourceType::Activity => self.db_conn.exists(&self.colls.docs_activities, res_id),
-            ResourceType::Segment => self.db_conn.exists(&self.colls.segments, res_id),
-            ResourceType::Telemetry => self.db_conn.exists(&self.colls.docs_telemetry, res_id),
+            ResourceType::Activity => self.db_conn.exists(&self.colls.docs_activities, res_id).await,
+            ResourceType::Segment => self.db_conn.exists(&self.colls.segments, res_id).await,
+            ResourceType::Telemetry => self.db_conn.exists(&self.colls.docs_telemetry, res_id).await,
         }
     }
 
-    pub fn save_after_before_timestamps(
+    pub async fn save_after_before_timestamps(
         &self,
         id: i64,
         after_ts: i64,
         before_ts: i64,
     ) -> Option<bool> {
         self.db_conn
-            .update_field(id, &self.colls.typed_athletes, &"before_ts", &before_ts)
+            .update_field(id, &self.colls.typed_athletes, &"before_ts", &before_ts).await
             .unwrap();
 
         self.db_conn
-            .update_field(id, &self.colls.typed_athletes, &"after_ts", &after_ts)
+            .update_field(id, &self.colls.typed_athletes, &"after_ts", &after_ts).await
     }
 
-    pub fn set_athlete_data(&self, athlete_data: &AthleteData) -> Option<bool> {
+    pub async fn set_athlete_data(&self, athlete_data: &AthleteData) -> Option<bool> {
         self.db_conn
-            .upsert_one::<AthleteData>(&self.colls.typed_athletes, athlete_data)
+            .upsert_one::<AthleteData>(&self.colls.typed_athletes, athlete_data).await
     }
 
-    pub fn get_athlete_tokens(&self, id: i64) -> Option<AthleteTokens> {
-        Some(self.get_athlete_data(id).unwrap().tokens)
+    pub async fn get_athlete_tokens(&self, id: i64) -> Option<AthleteTokens> {
+        if let Some(athlete_data) = self.get_athlete_data(id).await {
+            return Some(athlete_data.tokens);
+        }
+
+        None
     }
 
-    pub fn set_athlete_tokens(&self, id: i64, athlete_tokens: &AthleteTokens) -> Option<bool> {
+    pub async fn set_athlete_tokens(&self, id: i64, athlete_tokens: &AthleteTokens) -> Option<bool> {
         self.db_conn.update_field(
             id,
             &self.colls.typed_athletes,
             "tokens",
             &bson::to_document(athlete_tokens).unwrap(),
-        )
+        ).await
     }
 
-    pub fn store_resource(
+    pub async fn store_resource(
         &self,
         res_type: ResourceType,
         res_id: i64,
@@ -163,9 +175,9 @@ impl StravaDB {
         json["_id"] = serde_json::Value::Number(res_id.into());
 
         match res_type {
-            ResourceType::Activity => self.db_conn.upsert_one_raw(&self.colls.docs_activities, &json),
-            ResourceType::Segment => self.db_conn.upsert_one_raw(&self.colls.segments, &json),
-            ResourceType::Telemetry => self.db_conn.upsert_one_raw(&self.colls.docs_telemetry, &json),
+            ResourceType::Activity => self.db_conn.upsert_one_raw(&self.colls.docs_activities, &json).await,
+            ResourceType::Segment => self.db_conn.upsert_one_raw(&self.colls.segments, &json).await,
+            ResourceType::Telemetry => self.db_conn.upsert_one_raw(&self.colls.docs_telemetry, &json).await,
         }
     }
 }

@@ -1,13 +1,10 @@
 use crate::{data_types::common::Identifiable, database::mongodb::bson::Bson};
 use mongodb::{
     bson::{self, doc, Document},
-    options::ReplaceOptions,
-    sync::{Client, Collection, Database},
+    options::ReplaceOptions, Database, Collection, Client,
 };
 use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
-
-use super::cursors::I64Cursor;
 
 #[derive(Debug, Clone)]
 pub struct MongoConnection {
@@ -15,9 +12,9 @@ pub struct MongoConnection {
 }
 
 impl MongoConnection {
-    pub fn new(db: &'static str) -> Self {
+    pub async fn new(db: &'static str) -> Self {
         Self {
-            database: Client::with_uri_str("mongodb://localhost:27017")
+            database: Client::with_uri_str("mongodb://localhost:27017").await
                 .unwrap()
                 .database(db),
         }
@@ -27,51 +24,32 @@ impl MongoConnection {
         self.database.collection(name)
     }
 
-    fn doc_id_to_i64(data: Document) -> i64 {
-        match data.get("_id").unwrap() {
-            Bson::Int32(_) => data.get_i32("_id").unwrap().into(),
-            Bson::Int64(_) => data.get_i64("_id").unwrap().into(),
-            Bson::Double(_) => data.get_f64("_id").unwrap() as i64,
-            _ => panic!("Can't map"),
-        }
-    }
-
-    pub fn keys_id<T: DeserializeOwned + Unpin + Send + Sync>(
-        &self,
-        collection: &Collection<mongodb::bson::Document>,
-    ) -> I64Cursor {
-        let cursor: mongodb::sync::Cursor<mongodb::bson::Document> =
-            collection.find(None, None).unwrap();
-
-        I64Cursor::new(cursor, Self::doc_id_to_i64)
-    }
-
-    pub fn find<T: DeserializeOwned + Unpin + Send + Sync>(
+    pub async fn find<T: DeserializeOwned + Unpin + Send + Sync>(
         &self,        
         collection: &Collection<T>,
         query: Document,
-    ) -> mongodb::sync::Cursor<T>    
+    ) -> mongodb::Cursor<T>    
     {
         collection
-            .find(query, None)
+            .find(query, None).await
             .ok()
             .unwrap()
     }
 
-    pub fn find_one<T: DeserializeOwned + Unpin + Send + Sync>(
+    pub async fn find_one<T: DeserializeOwned + Unpin + Send + Sync>(
         &self,        
         collection: &Collection<T>,
         query: Document,
     ) -> Option<T>
     {
         collection
-            .find_one(query, None)
+            .find_one(query, None).await
             .ok()
             .unwrap()
     }
 
     // Function to set a JSON (used when retrieving data from web APIs)
-    pub fn upsert_one_raw<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
+    pub async fn upsert_one_raw<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
         &self,
         collection: &Collection<T>,
         doc: &serde_json::Value,
@@ -84,14 +62,14 @@ impl MongoConnection {
                 doc! {"_id": doc.get("_id").unwrap().as_f64().unwrap() as i64},
                 bson::to_document(doc).unwrap().borrow(),
                 ReplaceOptions::builder().upsert(true).build(),
-            )
+            ).await
             .unwrap();
 
         Some(res.modified_count > 0)
     }
 
     // Function to set a typed object 
-    pub fn upsert_one<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
+    pub async fn upsert_one<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
         &self,
         collection: &Collection<T>,
         doc: &T,
@@ -100,13 +78,13 @@ impl MongoConnection {
         T: Identifiable,
     {
         let res = collection
-            .replace_one(doc! {"_id": doc.as_i64()}, doc, ReplaceOptions::builder().upsert(true).build())
+            .replace_one(doc! {"_id": doc.as_i64()}, doc, ReplaceOptions::builder().upsert(true).build()).await
             .unwrap();
 
         Some(res.modified_count > 0)
     }
 
-    pub fn remove_all<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
+    pub async fn remove_all<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
         &self,
         collection: &Collection<T>,        
     ) -> Option<bool>
@@ -114,13 +92,13 @@ impl MongoConnection {
         T: Identifiable,
     {
         let res = collection
-            .delete_many(doc! {}, None)
+            .delete_many(doc! {}, None).await
             .unwrap();
 
         Some(res.deleted_count > 0)
     }
 
-    pub fn update_field<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(
+    pub async fn update_field<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(
         &self,
         key: KT,
         collection: &Collection<T>,
@@ -137,14 +115,14 @@ impl MongoConnection {
 
         Some(
             collection
-                .update_one(filter, update, None)
+                .update_one(filter, update, None).await
                 .unwrap()
                 .modified_count
                 > 0,
         )
     }
 
-    pub fn exists<KT, T: DeserializeOwned + Unpin + Send + Sync>(
+    pub async fn exists<KT, T: DeserializeOwned + Unpin + Send + Sync>(
         &self,
         collection: &Collection<mongodb::bson::Document>,
         id: KT,
@@ -153,7 +131,7 @@ impl MongoConnection {
         Bson: From<KT>,
         mongodb::bson::Document: Borrow<T>,
     {
-        let found = collection.find_one(Some(doc! {"_id": id}), None);
+        let found = collection.find_one(Some(doc! {"_id": id}), None).await;
 
         if let Ok(search_op) = found {
             if let Some(_) = search_op {
