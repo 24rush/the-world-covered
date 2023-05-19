@@ -1,34 +1,44 @@
 use chrono::Utc;
 
-use crate::{logvbln, strava::api::StravaApi, database::strava_db::{StravaDB, ResourceType}, logln, util::DateTimeUtils};
+use crate::{
+    database::strava_db::ResourceType,
+    logln, logvbln,
+    util::{dependencies::Dependencies, DateTimeUtils},
+};
 
-pub struct UtilitiesContext<'a> {
-    pub strava_api: &'a mut StravaApi,
-    pub persistance: &'a StravaDB,
+pub struct StravaDBSync<'a> {
+    pub dependencies: &'a mut Dependencies<'a>,
 }
 
-pub struct StravaDBSync;
-
-impl StravaDBSync {
+impl<'a> StravaDBSync<'a> {
     const CC: &str = "Util";
 
-    pub async fn sync_athlete_activities(ctx: &mut UtilitiesContext<'_>, id: i64) {
+    pub fn new(dependencies: &'a mut Dependencies<'a>) -> Self {
+        Self { dependencies }
+    }
+
+    pub async fn sync_athlete_activities(&mut self) {
         // Sync =
         // all activities from 0 to before_ts (if before_ts is not 0)
         //  +
         // all activities from after_ts to current timestamp (if interval passed and first stage is completed)
-        let athlete_data = ctx.persistance.get_athlete_data(id).await.unwrap();
+        let athlete_data = self
+            .dependencies
+            .strava_db()
+            .get_athlete_data(self.dependencies.athlete_id())
+            .await
+            .unwrap();
         let (after_ts, before_ts) = (athlete_data.after_ts, athlete_data.before_ts);
 
         logvbln!("sync_athlete_activities {} {}", before_ts, after_ts);
 
         if before_ts != 0 && after_ts != before_ts {
-            if let (last_activity_ts, false) =
-                StravaDBSync::download_activities_in_range(ctx, id, 0, before_ts).await
+            if let (last_activity_ts, false) = self.download_activities_in_range(0, before_ts).await
             {
                 // when done move before to 0 and after to last activity ts
-                ctx.persistance
-                    .save_after_before_timestamps(id, last_activity_ts, 0)
+                self.dependencies
+                    .strava_db()
+                    .save_after_before_timestamps(self.dependencies.athlete_id(), last_activity_ts, 0)
                     .await;
             }
         } else {
@@ -36,12 +46,18 @@ impl StravaDBSync {
             let days_since_last_sync = (current_ts - after_ts) / 86400;
 
             if days_since_last_sync >= 0 {
-                if let (_, false) =
-                    StravaDBSync::download_activities_in_range(ctx, id, after_ts, current_ts).await
+                if let (_, false) = self
+                    .download_activities_in_range(after_ts, current_ts)
+                    .await
                 {
                     // when done move after to current
-                    ctx.persistance
-                        .save_after_before_timestamps(id, current_ts, current_ts)
+                    self.dependencies
+                        .strava_db()
+                        .save_after_before_timestamps(
+                            self.dependencies.athlete_id(),
+                            current_ts,
+                            current_ts,
+                        )
                         .await;
                 }
             }
@@ -50,12 +66,7 @@ impl StravaDBSync {
         logvbln!("done syncing.");
     }
 
-    async fn download_activities_in_range(
-        ctx: &mut UtilitiesContext<'_>,
-        id: i64,
-        after_ts: i64,
-        before_ts: i64,
-    ) -> (i64, bool) {
+    async fn download_activities_in_range(&mut self, after_ts: i64, before_ts: i64) -> (i64, bool) {
         logln!(
             "download from {} to {}",
             DateTimeUtils::timestamp_to_str(after_ts),
@@ -69,12 +80,12 @@ impl StravaDBSync {
         let mut has_more_items = false;
 
         loop {
-            if let Some(activities_list) = ctx.strava_api.list_athlete_activities(
-                after_ts,
-                before_ts,
-                ACTIVITIES_PER_PAGE,
-                page,
-            ).await {
+            if let Some(activities_list) = self
+                .dependencies
+                .strava_api()
+                .list_athlete_activities(after_ts, before_ts, ACTIVITIES_PER_PAGE, page)
+                .await
+            {
                 has_more_items = activities_list.len() == ACTIVITIES_PER_PAGE;
 
                 for activity in activities_list {
@@ -83,12 +94,18 @@ impl StravaDBSync {
                     last_activity_ts =
                         DateTimeUtils::zulu2ts(&activity["start_date"].as_str().unwrap());
 
-                    ctx.persistance
-                        .save_after_before_timestamps(id, after_ts, last_activity_ts)
+                    self.dependencies
+                        .strava_db()
+                        .save_after_before_timestamps(
+                            self.dependencies.athlete_id(),
+                            after_ts,
+                            last_activity_ts,
+                        )
                         .await;
 
-                    if ctx
-                        .persistance
+                    if self
+                        .dependencies
+                        .strava_db()
                         .exists_resource(ResourceType::Activity, act_id)
                         .await
                     {
@@ -97,8 +114,8 @@ impl StravaDBSync {
                         continue;
                     }
 
-                    if let Some(mut new_activity) = ctx.strava_api.get_activity(act_id).await {
-                        ctx.persistance
+                    if let Some(mut new_activity) = self.dependencies.strava_api().get_activity(act_id).await {
+                        self.dependencies.strava_db()
                             .store_resource(ResourceType::Activity, act_id, &mut new_activity)
                             .await;
                     }

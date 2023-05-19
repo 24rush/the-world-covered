@@ -6,24 +6,21 @@ use data_types::{
     },
 };
 use database::{gc_db::GCDB, strava_db::StravaDB};
+use maintenance::db_integrity_checks::Options;
+use util::dependencies::{DependenciesBuilder, Required};
 
-use processors::Pipeline;
+use crate::maintenance::db_integrity_checks::DBIntegrityChecker;
+use processors::{DataCreationPipeline, PipelineOptions};
 use strava::api::StravaApi;
-use util::db_integrity_checks::DBIntegrityChecker;
 
-use crate::{
-    database::strava_db::ResourceType,
-    util::{
-        logging,
-        sync_from_strava::{UtilitiesContext},
-    },
-};
+use crate::{database::strava_db::ResourceType, util::logging};
 
 mod data_types;
 mod database;
 mod strava;
 mod util;
 
+mod maintenance;
 mod processors;
 
 pub struct App {
@@ -88,23 +85,45 @@ impl App {
         }
     }
 
-    pub async fn start_db_pipeline(&self) {
-        Pipeline::start(self.loggedin_athlete_id, &self.strava_db, &self.gc_db).await;
+    pub async fn start_db_creation(&self) {
+        DataCreationPipeline::new(
+            DependenciesBuilder::new(vec![
+                Required::AthleteId,
+                Required::GCDB,
+                Required::StravaDB,
+            ])
+            .with_athlete_id(self.loggedin_athlete_id)
+            .with_gc_db(&self.gc_db)
+            .with_strava_db(&self.strava_db)
+            .build(),
+        )
+        .start(&PipelineOptions {
+            commonalities: false,
+            route_processor: false,
+            gradient_finder: true,
+        })
+        .await;
     }
 
-    pub async fn perform_db_integrity_check(&mut self) {
-        let options = util::db_integrity_checks::Options {
-            skip_activity_sync: true,
-            skip_activity_telemetry: true,
-            skip_segment_caching: false,
-            skip_segment_telemetry: true,
-        };
-
-        let mut utilities_ctx = UtilitiesContext {
-            strava_api: &mut self.strava_api,
-            persistance: &self.strava_db,
-        };
-
-        DBIntegrityChecker::perform_db_integrity_check(self.loggedin_athlete_id, &options, &mut utilities_ctx).await;
+    pub async fn start_db_integrity_check(&mut self) {
+        DBIntegrityChecker::new(
+            DependenciesBuilder::new(vec![
+                Required::AthleteId,
+                Required::StravaDB,
+                Required::StravaApi,
+            ])
+            .with_athlete_id(self.loggedin_athlete_id)
+            .with_strava_api(&mut self.strava_api)
+            .with_strava_db(&self.strava_db)
+            .build(),
+            &Options {
+                skip_activity_sync: true,
+                skip_activity_telemetry: true,
+                skip_segment_caching: false,
+                skip_segment_telemetry: true,
+            },
+        )
+        .start()
+        .await;
     }
 }

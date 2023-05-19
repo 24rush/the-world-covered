@@ -1,16 +1,13 @@
 use std::collections::HashMap;
-
-use futures_util::{TryStreamExt};
+use futures_util::TryStreamExt;
 
 use crate::{
     data_types::{
         common::DocumentId,
         gc::{effort::Effort, route::Route, segment::Segment},
-        strava::{athlete::AthleteId},
     },
-    database::{gc_db::GCDB, strava_db::StravaDB},
     logln,
-    util::time::Benchmark,
+    util::{benchmark::Benchmark, dependencies::Dependencies},
 };
 
 use self::commonality::Commonality;
@@ -18,47 +15,54 @@ use self::commonality::Commonality;
 pub mod commonality;
 pub mod routes;
 
-struct PipelineContext<'a> {
-    athlete_id: AthleteId,
-    strava_db: &'a StravaDB,
-    gc_db: &'a GCDB,
+pub struct PipelineOptions {
+    pub commonalities: bool,
+    pub route_processor: bool,
+    pub gradient_finder: bool,
 }
 
-pub struct Pipeline {}
+pub struct DataCreationPipeline<'a> {
+    pub dependencies: &'a mut Dependencies<'a>,
+}
 
-impl Pipeline {
+impl<'a> DataCreationPipeline<'a> {
     const CC: &str = "Pipeline";
 
-    pub async fn start(athlete_id: AthleteId, strava_db: &StravaDB, gc_db: &GCDB) {
-        let pipe_context = PipelineContext {
-            athlete_id,
-            strava_db,
-            gc_db,
-        };
-
-        // 1 //
-        // Clear previous results and store latest ones
-        gc_db.clear_routes().await;
-
-        // Run route matching module => routes collections
-        Pipeline::run_commonalities((&pipe_context).into()).await;
-
-        // 2 //
-        // Clear previous segments
-        gc_db.clear_segments().await;
-
-        // Using created routes, run RouteProcessor => segments collections, updates route collection
-        Pipeline::run_route_processor(&pipe_context, gc_db.get_routes(athlete_id).await).await;
+    pub fn new(dependencies: &'a mut Dependencies<'a>) -> Self {
+        Self { dependencies }
     }
 
-    async fn run_commonalities(pipe_context: &PipelineContext<'_>) {
-        let b = Benchmark::start("th");
-        let mut telemetries = pipe_context
-            .strava_db
-            .get_telemetry(pipe_context.athlete_id)
-            .await;
+    pub async fn start(&self, options: &PipelineOptions) {
+        if options.commonalities {
+            // 1 //
+            // Clear previous results and store latest ones
+            self.dependencies.gc_db().clear_routes().await;
+
+            // Run route matching module => routes collections
+            self.run_commonalities().await;
+        }
+
+        if options.route_processor {
+            // 2 //
+            // Clear previous segments
+            self.dependencies.gc_db().clear_segments().await;
+
+            // Using created routes, run RouteProcessor => segments collections, updates route collection
+            self.run_route_processor(self.dependencies.gc_db().get_routes(self.dependencies.athlete_id()).await)
+                .await;
+        }
+
+        if options.gradient_finder {
+            // 3 //
+            // Find climbs and descends
+        }
+    }
+
+    async fn run_commonalities(&self) {
+        Benchmark::start("commonalities");
 
         let mut processor: Commonality = Default::default();
+        let mut telemetries = self.dependencies.strava_db().get_telemetry(self.dependencies.athlete_id()).await;
 
         let mut items_to_process = 0;
         while let Some(telemetry) = telemetries.try_next().await.unwrap() {
@@ -72,24 +76,18 @@ impl Pipeline {
 
         for mut route in processor.end_session() {
             // Mark the routes as being the athlete's
-            route.athlete_id = pipe_context.athlete_id;
-            pipe_context.gc_db.update_route(&route).await;
-        };
-
-        logln!("{}", b);
+            route.athlete_id = self.dependencies.athlete_id();
+            self.dependencies.gc_db().update_route(&route).await;
+        }
     }
 
-    async fn run_route_processor(
-        pipe_context: &PipelineContext<'_>,
-        mut routes: mongodb::Cursor<Route>,
-    ) {
+    async fn run_route_processor(&self, mut routes: mongodb::Cursor<Route>) {
         let mut discovered_segments: HashMap<DocumentId, Segment> = HashMap::new();
         let mut discovered_efforts: Vec<Effort> = Vec::new();
 
         while let Some(mut route) = routes.try_next().await.unwrap() {
-            let mut activities = pipe_context
-                .strava_db
-                .get_athlete_activities_with_ids(pipe_context.athlete_id, &route.activities)
+            let mut activities = self.dependencies.strava_db()
+                .get_athlete_activities_with_ids(self.dependencies.athlete_id(), &route.activities)
                 .await;
 
             let mut max_distance = 0.0;
@@ -118,11 +116,7 @@ impl Pipeline {
                 });
             }
 
-            if let Some(master_activity) = pipe_context
-                .strava_db
-                .get_activity(route.master_activity_id)
-                .await
-            {
+            if let Some(master_activity) = self.dependencies.strava_db().get_activity(route.master_activity_id).await {
                 // Extract data from master activity and put it into route
                 route.polyline = master_activity.map.polyline;
                 route.climb_per_km =
@@ -133,7 +127,7 @@ impl Pipeline {
                     // Extract segment
                     let seg_id = effort_in_master.segment.id as DocumentId;
 
-                    if let Some(db_segment) = pipe_context.strava_db.get_segment(seg_id).await {
+                    if let Some(db_segment) = self.dependencies.strava_db().get_segment(seg_id).await {
                         discovered_segments.insert(
                             seg_id,
                             Segment {
@@ -152,15 +146,15 @@ impl Pipeline {
                 }
             }
 
-            pipe_context.gc_db.update_route(&route).await;
+            self.dependencies.gc_db().update_route(&route).await;
         }
 
         for segment in discovered_segments {
-            pipe_context.gc_db.update_segment(&segment.1).await;
-        };
+            self.dependencies.gc_db().update_segment(&segment.1).await;
+        }
 
         for effort in discovered_efforts {
-            pipe_context.gc_db.update_effort(&effort).await;
-        };
+            self.dependencies.gc_db().update_effort(&effort).await;
+        }
     }
 }

@@ -1,10 +1,8 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 
-pub mod db_integrity_checks;
-pub mod sync_from_strava;
-
 pub mod logging;
-pub mod time;
+pub mod benchmark;
+pub mod dependencies;
 
 pub struct DateTimeUtils {}
 
