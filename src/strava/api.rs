@@ -1,3 +1,5 @@
+use std::sync::RwLock;
+
 use chrono::Utc;
 use curl::easy::{Easy, List};
 use serde_derive::Deserialize;
@@ -20,7 +22,7 @@ struct Secrets {
 
 pub struct StravaApi {
     athlete_id: AthleteId, 
-    tokens: AthleteTokens,
+    tokens: RwLock<AthleteTokens>,
     secrets: Secrets,
     persistance: StravaDB,
 }
@@ -28,7 +30,7 @@ pub struct StravaApi {
 impl StravaApi {
     const CC: &str = "StravaAPI";
 
-    fn get_refreshed_tokens(&mut self) {
+    fn get_refreshed_tokens(&self) {
         let mut handle = Easy::new();
 
         let header = format!(
@@ -38,7 +40,7 @@ impl StravaApi {
             self.secrets.client_id,
             self.secrets.client_secret,
             self.secrets.user_authorization_code,
-            self.tokens.refresh_token
+            self.tokens.read().unwrap().refresh_token
         );
 
         handle
@@ -64,12 +66,11 @@ impl StravaApi {
         logvbln!("{:?}", s);
 
         let new_tokens: AthleteTokens = serde_json::from_str(s.unwrap()).unwrap();
-        self.tokens.access_token = new_tokens.access_token;
-        self.tokens.refresh_token = new_tokens.refresh_token;
-        self.tokens.expires_at = new_tokens.expires_at;
+        let mut tokens = self.tokens.write().unwrap();
+        *tokens = new_tokens;
     }
 
-    async fn get_request(&mut self, url: &str) -> Option<serde_json::Value> {
+    async fn get_request(&self, url: &str) -> Option<serde_json::Value> {
         self.refresh_tokens_if_expired().await;
 
         let bearer = self.get_access_token();
@@ -133,20 +134,20 @@ impl StravaApi {
         toml::from_str(&secrets_content).unwrap()
     }
 
-    fn get_access_token(&self) -> &String {
-        return &self.tokens.access_token;
+    fn get_access_token(&self) -> String {
+        return self.tokens.read().unwrap().access_token.clone()
     }
 
-    async fn refresh_tokens_if_expired(&mut self) {
+    async fn refresh_tokens_if_expired(&self) {
         let current_ts: i64 = Utc::now().timestamp();
 
-        if current_ts > self.tokens.expires_at as i64 {
+        if current_ts > self.tokens.read().unwrap().expires_at as i64 {
             logln!("Tokens EXPIRED. Refreshing");
 
             self.get_refreshed_tokens();
 
             self.persistance
-                .set_athlete_tokens(self.athlete_id, &self.tokens)
+                .set_athlete_tokens(self.athlete_id, &self.tokens.read().unwrap())
                 .await;
         }
     }
@@ -156,11 +157,11 @@ impl StravaApi {
             athlete_id,
             secrets: StravaApi::read_secrets_from_file(),
             persistance: StravaDB::new().await,
-            tokens: Default::default(),
+            tokens: RwLock::new(AthleteTokens::default())
         };
 
         if let Some(athlete_tokens) = this.persistance.get_athlete_tokens(athlete_id).await {
-            this.tokens = athlete_tokens;
+            this.tokens = RwLock::new(athlete_tokens);
 
             return Some(this);
         }
@@ -168,25 +169,25 @@ impl StravaApi {
         None
     }
 
-    pub async fn get_activity(&mut self, act_id: i64) -> Option<serde_json::Value> {
+    pub async fn get_activity(&self, act_id: i64) -> Option<serde_json::Value> {
         self.get_request(            
             &(STRAVA_BASE_URL.to_string() + &format!("activities/{}", act_id.to_string())),
         ).await
     }
 
-    pub async fn get_activity_telemetry(&mut self, act_id: i64) -> Option<serde_json::Value> {
+    pub async fn get_activity_telemetry(&self, act_id: i64) -> Option<serde_json::Value> {
         self.get_request(
             &(STRAVA_BASE_URL.to_string() + &format!("activities/{}/streams?keys=time,latlng,altitude,velocity_smooth,grade_smooth,distance&key_by_type=true", act_id.to_string()))
         ).await
     }
 
-    pub async fn get_segment(&mut self, seg_id: i64) -> Option<serde_json::Value> {
+    pub async fn get_segment(&self, seg_id: i64) -> Option<serde_json::Value> {
         self.get_request(
             &(STRAVA_BASE_URL.to_string() + &format!("segments/{}", seg_id.to_string())),
         ).await
     }
 
-    pub async fn get_segment_telemetry(&mut self, seg_id: i64) -> Option<serde_json::Value> {
+    pub async fn get_segment_telemetry(&self, seg_id: i64) -> Option<serde_json::Value> {
         self.get_request(
             &(STRAVA_BASE_URL.to_string()
                 + &format!(
@@ -197,7 +198,7 @@ impl StravaApi {
     }
 
     pub async fn list_athlete_activities(
-        &mut self,
+        &self,
         after_ts: i64,
         before_ts: i64,
         per_page: usize,

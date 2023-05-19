@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use futures_util::TryStreamExt;
 
 use crate::{
     data_types::{
@@ -65,7 +64,9 @@ impl<'a> DataCreationPipeline<'a> {
         let mut telemetries = self.dependencies.strava_db().get_telemetry(self.dependencies.athlete_id()).await;
 
         let mut items_to_process = 0;
-        while let Some(telemetry) = telemetries.try_next().await.unwrap() {
+        while telemetries.advance().await.unwrap() {
+            let telemetry = telemetries.deserialize_current().unwrap();
+            
             if items_to_process >= 50 {
                 break;
             }
@@ -85,14 +86,18 @@ impl<'a> DataCreationPipeline<'a> {
         let mut discovered_segments: HashMap<DocumentId, Segment> = HashMap::new();
         let mut discovered_efforts: Vec<Effort> = Vec::new();
 
-        while let Some(mut route) = routes.try_next().await.unwrap() {
+        while routes.advance().await.unwrap() {
+            let mut route = routes.deserialize_current().unwrap();
+
             let mut activities = self.dependencies.strava_db()
                 .get_athlete_activities_with_ids(self.dependencies.athlete_id(), &route.activities)
                 .await;
 
             let mut max_distance = 0.0;
 
-            while let Some(activity) = activities.try_next().await.unwrap() {
+            while activities.advance().await.unwrap() {
+                let activity = activities.deserialize_current().unwrap();
+
                 // Determine which matched activity is the longest and set it to master
                 if activity.distance > max_distance {
                     max_distance = activity.distance;

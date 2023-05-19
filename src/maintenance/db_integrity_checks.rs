@@ -1,5 +1,3 @@
-use futures_util::TryStreamExt;
-
 use crate::{
     data_types::{common::Identifiable, strava::activity::Activity},
     database::strava_db::ResourceType,
@@ -35,7 +33,7 @@ impl<'a> DBIntegrityChecker<'a> {
     async fn process_activity(&mut self, activity: &Activity) {
         let act_id = activity.as_i64();
 
-        logln!("Checking activity: {}", act_id);
+        logln!("Checking activity: {}", activity._id);
 
         if !self.options.skip_activity_telemetry {
             // Check telemetry for activity
@@ -62,7 +60,7 @@ impl<'a> DBIntegrityChecker<'a> {
                     let mut m = telemetry_json.as_object().unwrap().clone();
                     m.insert(
                         "athlete".to_string(),
-                        serde_json::json!({ "id": self.dependencies.athlete_id }),
+                        serde_json::json!({ "id": self.dependencies.athlete_id() }),
                     );
                     m.insert("type".to_string(), serde_json::Value::String(act.r#type));
 
@@ -86,11 +84,15 @@ impl<'a> DBIntegrityChecker<'a> {
 
         if !self.options.skip_activity_sync {
             StravaDBSync::new(
-                DependenciesBuilder::new(vec![Required::AthleteId, Required::StravaDB, Required::StravaApi])
-                    .with_athlete_id(self.dependencies.athlete_id())
-                    .with_strava_db(self.dependencies.strava_db.unwrap())
-                    .with_strava_api(self.dependencies.strava_api())
-                    .build(),
+                DependenciesBuilder::new(vec![
+                    Required::AthleteId,
+                    Required::StravaDB,
+                    Required::StravaApi,
+                ])
+                .with_athlete_id(self.dependencies.athlete_id())
+                .with_strava_db(self.dependencies.strava_db())
+                .with_strava_api(self.dependencies.strava_api())
+                .build(),
             )
             .sync_athlete_activities()
             .await;
@@ -99,15 +101,16 @@ impl<'a> DBIntegrityChecker<'a> {
         if !self.options.skip_activity_telemetry || !self.options.skip_segment_caching {
             let mut athlete_data_touched = false;
 
-            while let Some(activity) = self
+            let mut cursor = self
                 .dependencies
                 .strava_db()
                 .get_athlete_activities(self.dependencies.athlete_id())
-                .await
-                .try_next()
-                .await
-                .unwrap()
+                .await;
+
+            while cursor.advance().await.unwrap()
             {
+                let activity = cursor.deserialize_current().unwrap();
+
                 // Go over segment efforts, pickup all the segments ids and add them to the user's visited
                 for effort in &activity.segment_efforts {
                     let seg_id = effort.segment.id;

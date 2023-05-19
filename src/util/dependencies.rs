@@ -9,11 +9,11 @@ pub enum Required {
     GCDB,
 }
 
-pub struct Dependencies<'a> {
-    pub athlete_id: Option<AthleteId>,
-    pub strava_api: Option<&'a mut StravaApi>,
-    pub strava_db: Option<&'a StravaDB>,
-    pub gc_db: Option<&'a GCDB>,
+pub struct Dependencies<'a> {    
+    athlete_id: Option<AthleteId>,
+    strava_api: Option<&'a StravaApi>,
+    strava_db: Option<&'a StravaDB>,
+    gc_db: Option<&'a GCDB>,
 }
 
 impl Dependencies<'_> {
@@ -25,8 +25,8 @@ impl Dependencies<'_> {
         self.gc_db.unwrap()
     }
 
-    pub fn strava_api(&mut self) -> &mut StravaApi {
-        self.strava_api.as_mut().unwrap()
+    pub fn strava_api(&self) -> &StravaApi {
+        self.strava_api.unwrap()
     }
 
     pub fn athlete_id(&self) -> AthleteId {
@@ -75,7 +75,7 @@ impl<'a> DependenciesBuilder<'a> {
 
     pub fn with_strava_api(
         &'a mut self,
-        strava_api: &'a mut StravaApi,
+        strava_api: &'a StravaApi,
     ) -> &'a mut DependenciesBuilder<'a> {
         self.dependencies.strava_api = Some(strava_api);
         self

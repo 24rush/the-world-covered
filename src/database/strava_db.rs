@@ -1,4 +1,3 @@
-use futures_util::{TryStreamExt};
 use mongodb::{
     bson::{self, doc}, Collection,
 };
@@ -7,7 +6,7 @@ use crate::data_types::{strava:: {
     activity::{Activity},
     athlete::{AthleteData, AthleteTokens},
     telemetry::Telemetry, segment::Segment,
-}, common::DocumentId};
+}, common::{DocumentId, Identifiable}};
 
 use super::{mongodb::MongoConnection};
 
@@ -85,8 +84,8 @@ impl StravaDB {
 
         let mut act_ids : Vec<DocumentId> = Vec::new();
 
-        while let Some(act) = cursor.try_next().await.unwrap() {
-            act_ids.push(act._id as i64);
+        while cursor.advance().await.unwrap() {
+            act_ids.push(cursor.deserialize_current().unwrap().as_i64());
         }
 
         act_ids
