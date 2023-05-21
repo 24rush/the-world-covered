@@ -1,10 +1,10 @@
-use serde_derive::Deserialize;
+use serde_derive::{Deserialize, Serialize};
 
 use crate::data_types::common::DocumentId;
 
 use super::common::{Map, ResourceId};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Effort {
     pub id: DocumentId,
     pub athlete: ResourceId,
@@ -16,7 +16,7 @@ pub struct Effort {
     pub end_index: i32,    
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Activity {
     pub _id: f64,
     pub distance: f32,

@@ -1,8 +1,11 @@
 use crate::{
-    data_types::{common::Identifiable, strava::activity::Activity},
+    data_types::{
+        common::Identifiable,
+        strava::{activity::Activity, athlete::AthleteId},
+    },
     database::strava_db::ResourceType,
     logln,
-    util::dependencies::{Dependencies, DependenciesBuilder, Required},
+    util::facilities::{Facilities, DependenciesBuilder, Required},
 };
 
 use super::sync_from_strava::StravaDBSync;
@@ -16,15 +19,19 @@ pub struct Options {
 }
 
 pub struct DBIntegrityChecker<'a> {
+    athlete_id: AthleteId,
     pub options: Options,
-    pub dependencies: &'a mut Dependencies<'a>,
+    pub dependencies: &'a mut Facilities<'a>,
 }
 
 impl<'a> DBIntegrityChecker<'a> {
     const CC: &str = "DBIntegrityChecker";
 
-    pub fn new(dependencies: &'a mut Dependencies<'a>, options: &Options) -> Self {
+    pub fn new(dependencies: &'a mut Facilities<'a>, options: &Options) -> Self {
+        dependencies.check(vec![Required::StravaDB, Required::StravaApi]);
+
         Self {
+            athlete_id: 0,
             dependencies,
             options: options.clone(),
         }
@@ -60,7 +67,7 @@ impl<'a> DBIntegrityChecker<'a> {
                     let mut m = telemetry_json.as_object().unwrap().clone();
                     m.insert(
                         "athlete".to_string(),
-                        serde_json::json!({ "id": self.dependencies.athlete_id() }),
+                        serde_json::json!({ "id": self.athlete_id }),
                     );
                     m.insert("type".to_string(), serde_json::Value::String(act.r#type));
 
@@ -74,27 +81,24 @@ impl<'a> DBIntegrityChecker<'a> {
         }
     }
 
-    pub async fn start(&mut self) {
+    pub async fn start(&mut self, athlete_id: AthleteId) {
+        self.athlete_id = athlete_id;
+
         let mut athlete_data = self
             .dependencies
             .strava_db()
-            .get_athlete_data(self.dependencies.athlete_id())
+            .get_athlete_data(athlete_id)
             .await
             .unwrap();
 
         if !self.options.skip_activity_sync {
             StravaDBSync::new(
-                DependenciesBuilder::new(vec![
-                    Required::AthleteId,
-                    Required::StravaDB,
-                    Required::StravaApi,
-                ])
-                .with_athlete_id(self.dependencies.athlete_id())
-                .with_strava_db(self.dependencies.strava_db())
-                .with_strava_api(self.dependencies.strava_api())
-                .build(),
+                DependenciesBuilder::new()
+                    .with_strava_db(self.dependencies.strava_db())
+                    .with_strava_api(self.dependencies.strava_api())
+                    .build(),
             )
-            .sync_athlete_activities()
+            .sync_athlete_activities(athlete_id)
             .await;
         }
 
@@ -104,11 +108,10 @@ impl<'a> DBIntegrityChecker<'a> {
             let mut cursor = self
                 .dependencies
                 .strava_db()
-                .get_athlete_activities(self.dependencies.athlete_id())
+                .get_athlete_activities(athlete_id)
                 .await;
 
-            while cursor.advance().await.unwrap()
-            {
+            while cursor.advance().await.unwrap() {
                 let activity = cursor.deserialize_current().unwrap();
 
                 // Go over segment efforts, pickup all the segments ids and add them to the user's visited
@@ -119,7 +122,7 @@ impl<'a> DBIntegrityChecker<'a> {
                     athlete_data_touched = true;
                 }
 
-                self.process_activity(&activity).await;
+                self.process_activity(&activity).await;     
             }
 
             if athlete_data_touched {

@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 
 pub mod logging;
 pub mod benchmark;
-pub mod dependencies;
+pub mod facilities;
 
 pub struct DateTimeUtils {}
 

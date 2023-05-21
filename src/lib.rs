@@ -7,10 +7,10 @@ use data_types::{
 };
 use database::{gc_db::GCDB, strava_db::StravaDB};
 use maintenance::db_integrity_checks::Options;
-use util::dependencies::{DependenciesBuilder, Required};
+use util::facilities::{DependenciesBuilder};
 
 use crate::maintenance::db_integrity_checks::DBIntegrityChecker;
-use processors::{DataCreationPipeline, PipelineOptions};
+use processors::{DataCreationPipeline, DataCreationPipelineOptions};
 use strava::api::StravaApi;
 
 use crate::{database::strava_db::ResourceType, util::logging};
@@ -24,8 +24,8 @@ mod maintenance;
 mod processors;
 
 pub struct App {
-    loggedin_athlete_id: AthleteId,
-    strava_api: StravaApi,
+    loggedin_athlete_id: Option<AthleteId>,
+    strava_api: Option<StravaApi>,
     strava_db: StravaDB,
     gc_db: GCDB,
 }
@@ -33,13 +33,22 @@ pub struct App {
 impl App {
     const CC: &str = "App";
 
-    pub async fn new(ath_id: AthleteId) -> Option<Self> {
+    pub async fn anonym_athlete() -> Self {
+        Self {
+            loggedin_athlete_id: None,
+            strava_api: None,
+            strava_db: StravaDB::new().await,
+            gc_db: GCDB::new().await,
+        }
+    }
+
+    pub async fn with_athlete(ath_id: AthleteId) -> Option<Self> {
         logging::set_global_level(logging::LogLevel::VERBOSE);
 
         if let Some(strava_api) = StravaApi::new(ath_id).await {
             return Some(Self {
-                loggedin_athlete_id: ath_id,
-                strava_api,
+                loggedin_athlete_id: Some(ath_id),
+                strava_api: Some(strava_api),
                 strava_db: StravaDB::new().await,
                 gc_db: GCDB::new().await,
             });
@@ -78,7 +87,7 @@ impl App {
     pub async fn store_athlete_activity(&mut self, act_id: i64) {
         logln!("Downloading activity: {}", act_id);
 
-        if let Some(mut new_activity) = self.strava_api.get_activity(act_id).await {
+        if let Some(mut new_activity) = self.strava_api.as_ref().unwrap().get_activity(act_id).await {
             self.strava_db
                 .store_resource(ResourceType::Activity, act_id, &mut new_activity)
                 .await;
@@ -87,35 +96,27 @@ impl App {
 
     pub async fn start_db_creation(&self) {
         DataCreationPipeline::new(
-            DependenciesBuilder::new(vec![
-                Required::AthleteId,
-                Required::GCDB,
-                Required::StravaDB,
-            ])
-            .with_athlete_id(self.loggedin_athlete_id)
-            .with_gc_db(&self.gc_db)
-            .with_strava_db(&self.strava_db)
-            .build(),
+            DependenciesBuilder::new()
+                .with_gc_db(&self.gc_db)
+                .with_strava_db(&self.strava_db)
+                .build(),
         )
-        .start(&PipelineOptions {
-            commonalities: false,
-            route_processor: false,
-            gradient_finder: true,
-        })
+        .start(
+            self.loggedin_athlete_id.unwrap(),
+            &DataCreationPipelineOptions {
+                commonalities: false,
+                route_processor: true
+            },
+        )
         .await;
     }
 
     pub async fn start_db_integrity_check(&mut self) {
         DBIntegrityChecker::new(
-            DependenciesBuilder::new(vec![
-                Required::AthleteId,
-                Required::StravaDB,
-                Required::StravaApi,
-            ])
-            .with_athlete_id(self.loggedin_athlete_id)
-            .with_strava_api(&mut self.strava_api)
-            .with_strava_db(&self.strava_db)
-            .build(),
+            DependenciesBuilder::new()
+                .with_strava_api(&mut self.strava_api.as_ref().unwrap())
+                .with_strava_db(&self.strava_db)
+                .build(),
             &Options {
                 skip_activity_sync: true,
                 skip_activity_telemetry: true,
@@ -123,7 +124,7 @@ impl App {
                 skip_segment_telemetry: true,
             },
         )
-        .start()
+        .start(self.loggedin_athlete_id.unwrap())
         .await;
     }
 }

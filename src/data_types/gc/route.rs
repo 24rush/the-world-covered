@@ -1,6 +1,12 @@
 use serde_derive::{Deserialize, Serialize};
-
 use crate::data_types::{common::{Identifiable, DocumentId}, strava::athlete::AthleteId};
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Gradient {
+    pub start: usize,
+    pub end: usize,
+    pub gradient: f32
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Route {
@@ -11,7 +17,8 @@ pub struct Route {
     pub polyline: String,
     pub segment_ids: Vec<DocumentId>,
     
-    pub climb_per_km: f32
+    pub meters_climbed_per_km: f32,
+    pub gradients: Vec<Gradient>    
 }
 
 impl Identifiable for Route {

@@ -1,4 +1,5 @@
 use ground_covered::App;
+
 use rocket::http::{ContentType, Status};
 
 #[macro_use]
@@ -30,22 +31,6 @@ impl Fairing for Cors {
     }
 }
 
-/*
-fn main() {
-    let current_athlete_id = 4399230;
-    let app = App::new(current_athlete_id);
-
-    if let None = app.get_athlete_data(current_athlete_id) {
-        app.create_athlete(current_athlete_id);
-    }
-
-    let _athlete_data = app.get_athlete_data(current_athlete_id).unwrap();
-
-    //app.perform_db_integrity_check();
-    app.start_db_pipeline();
-}
-*/
-
 #[options("/<_..>")]
 fn all_options() {
     /* Intentionally left empty */
@@ -54,7 +39,7 @@ fn all_options() {
 #[get("/routes/<athlete_id>")]
 async fn routes(athlete_id: &str) -> (Status, (ContentType, String)) {
     if let Ok(ath_id) = athlete_id.parse::<i64>() {
-        if let Some(app) = App::new(ath_id).await {
+        if let Some(app) = App::with_athlete(ath_id).await {
             if let Some(_) = app.get_athlete_data(ath_id).await {
                 let routes = app.get_routes(ath_id).await;
 
@@ -69,9 +54,34 @@ async fn routes(athlete_id: &str) -> (Status, (ContentType, String)) {
     (Status::NotFound, (ContentType::Text, String::new()))
 }
 
+#[get("/activities/<act_id>")]
+async fn activities(act_id: &str) -> (Status, (ContentType, String)) {
+    if let Ok(act_id) = act_id.parse::<i64>() {
+        let app = App::anonym_athlete().await;
+        if let Some(activity) = app.get_activity(act_id).await {
+                return (
+                    Status::Ok,
+                    (ContentType::JSON, serde_json::to_string(&activity).unwrap()),
+                );
+            }
+        }    
+
+    (Status::NotFound, (ContentType::Text, String::new()))
+}
+
+#[tokio::main]
+async fn main() {
+    let app = App::with_athlete(4399230).await;
+
+    //app.unwrap().start_db_integrity_check().await;
+    app.unwrap().start_db_creation().await;
+}
+
+/*
 #[launch]
 fn rocket() -> _ {
     rocket::build()
         .attach(Cors)
-        .mount("/", routes![routes, all_options])
+        .mount("/", routes![routes, activities, all_options])
 }
+*/

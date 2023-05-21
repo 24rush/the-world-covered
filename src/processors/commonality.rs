@@ -128,7 +128,8 @@ impl<'a> Commonality<'a> {
                     master_activity_id: 0,
                     polyline: "".to_string(),
                     segment_ids: Vec::new(),
-                    climb_per_km: 0.0
+                    meters_climbed_per_km: 0.0,
+                    gradients: Vec::new()
                 }
             })
             .collect()

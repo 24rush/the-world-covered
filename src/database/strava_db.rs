@@ -101,12 +101,17 @@ impl StravaDB {
             .find::<Activity>(&self.colls.typed_activities, doc! {"athlete.id": ath_id, "_id": {"$in": ids}}).await
     }
     
+    pub async fn get_max_distance_activity_in_ids(&self, ids: &Vec<DocumentId>) -> Option<Activity> {
+        self.db_conn
+            .max::<Activity>(&self.colls.typed_activities, doc! {"_id": {"$in": ids}}, "distance").await
+    }
+
     pub async fn get_telemetry_by_id(&self, id: i64) -> Option<Telemetry> {
         self.db_conn
             .find_one(&self.colls.typed_telemetry, doc! {"_id": id}).await
     }
 
-    pub async fn get_telemetry(&self, ath_id: i64) -> mongodb::Cursor<Telemetry> {
+    pub async fn get_athlete_telemetries(&self, ath_id: i64) -> mongodb::Cursor<Telemetry> {
         self.db_conn
             .find::<Telemetry>(&self.colls.typed_telemetry, doc! {"athlete.id": ath_id}).await
     }

@@ -1,7 +1,8 @@
 use crate::{data_types::common::Identifiable, database::mongodb::bson::Bson};
 use mongodb::{
     bson::{self, doc, Document},
-    options::ReplaceOptions, Database, Collection, Client,
+    options::{FindOptions, ReplaceOptions},
+    Client, Collection, Database,
 };
 use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
@@ -14,7 +15,8 @@ pub struct MongoConnection {
 impl MongoConnection {
     pub async fn new(db: &'static str) -> Self {
         Self {
-            database: Client::with_uri_str("mongodb://localhost:27017").await
+            database: Client::with_uri_str("mongodb://localhost:27017")
+                .await
                 .unwrap()
                 .database(db),
         }
@@ -24,28 +26,46 @@ impl MongoConnection {
         self.database.collection(name)
     }
 
-    pub async fn find<T: DeserializeOwned + Unpin + Send + Sync>(
-        &self,        
+    pub async fn max<T: DeserializeOwned + Unpin + Send + Sync>(
+        &self,
         collection: &Collection<T>,
         query: Document,
-    ) -> mongodb::Cursor<T>    
-    {
-        collection
-            .find(query, None).await
-            .ok()
-            .unwrap()
+        field: &str,
+    ) -> Option<T> {
+        let mut cursor = collection
+            .find(
+                query,
+                FindOptions::builder()
+                    .limit(1)
+                    .sort(doc! {field: -1})
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        if let Ok(found) = cursor.advance().await {
+            if found {
+                return Some(cursor.deserialize_current().unwrap());
+            }
+        }
+
+        None
+    }
+
+    pub async fn find<T: DeserializeOwned + Unpin + Send + Sync>(
+        &self,
+        collection: &Collection<T>,
+        query: Document,
+    ) -> mongodb::Cursor<T> {
+        collection.find(query, None).await.ok().unwrap()
     }
 
     pub async fn find_one<T: DeserializeOwned + Unpin + Send + Sync>(
-        &self,        
+        &self,
         collection: &Collection<T>,
         query: Document,
-    ) -> Option<T>
-    {
-        collection
-            .find_one(query, None).await
-            .ok()
-            .unwrap()
+    ) -> Option<T> {
+        collection.find_one(query, None).await.ok().unwrap()
     }
 
     // Function to set a JSON (used when retrieving data from web APIs)
@@ -62,13 +82,14 @@ impl MongoConnection {
                 doc! {"_id": doc.get("_id").unwrap().as_f64().unwrap() as i64},
                 bson::to_document(doc).unwrap().borrow(),
                 ReplaceOptions::builder().upsert(true).build(),
-            ).await
+            )
+            .await
             .unwrap();
 
         Some(res.modified_count > 0)
     }
 
-    // Function to set a typed object 
+    // Function to set a typed object
     pub async fn upsert_one<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
         &self,
         collection: &Collection<T>,
@@ -78,7 +99,12 @@ impl MongoConnection {
         T: Identifiable,
     {
         let res = collection
-            .replace_one(doc! {"_id": doc.as_i64()}, doc, ReplaceOptions::builder().upsert(true).build()).await
+            .replace_one(
+                doc! {"_id": doc.as_i64()},
+                doc,
+                ReplaceOptions::builder().upsert(true).build(),
+            )
+            .await
             .unwrap();
 
         Some(res.modified_count > 0)
@@ -86,14 +112,12 @@ impl MongoConnection {
 
     pub async fn remove_all<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
         &self,
-        collection: &Collection<T>,        
+        collection: &Collection<T>,
     ) -> Option<bool>
     where
         T: Identifiable,
     {
-        let res = collection
-            .delete_many(doc! {}, None).await
-            .unwrap();
+        let res = collection.delete_many(doc! {}, None).await.unwrap();
 
         Some(res.deleted_count > 0)
     }
@@ -115,7 +139,8 @@ impl MongoConnection {
 
         Some(
             collection
-                .update_one(filter, update, None).await
+                .update_one(filter, update, None)
+                .await
                 .unwrap()
                 .modified_count
                 > 0,
