@@ -1,5 +1,4 @@
 use ground_covered::App;
-
 use rocket::http::{ContentType, Status};
 
 #[macro_use]
@@ -59,16 +58,31 @@ async fn activities(act_id: &str) -> (Status, (ContentType, String)) {
     if let Ok(act_id) = act_id.parse::<i64>() {
         let app = App::anonym_athlete().await;
         if let Some(activity) = app.get_activity(act_id).await {
-                return (
-                    Status::Ok,
-                    (ContentType::JSON, serde_json::to_string(&activity).unwrap()),
-                );
-            }
-        }    
+            return (
+                Status::Ok,
+                (ContentType::JSON, serde_json::to_string(&activity).unwrap()),
+            );
+        }
+    }
 
     (Status::NotFound, (ContentType::Text, String::new()))
 }
 
+#[post("/query_activities", data = "<query>")]
+async fn query_activities(query: String) -> (Status, (ContentType, String)) {    
+    let app = App::anonym_athlete().await;
+    let activities = app.query_activities(&query).await;
+
+    (
+        Status::Ok,
+        (
+            ContentType::JSON,
+            serde_json::to_string(&activities).unwrap(),
+        ),
+    )
+}
+
+/*
 #[tokio::main]
 async fn main() {
     let app = App::with_athlete(4399230).await;
@@ -77,11 +91,11 @@ async fn main() {
     app.unwrap().start_db_creation().await;
 }
 
-/*
+*/
 #[launch]
 fn rocket() -> _ {
-    rocket::build()
-        .attach(Cors)
-        .mount("/", routes![routes, activities, all_options])
+    rocket::build().attach(Cors).mount(
+        "/",
+        routes![routes, activities, query_activities, all_options],
+    )
 }
-*/

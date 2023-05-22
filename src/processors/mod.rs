@@ -109,8 +109,6 @@ impl<'a> DataCreationPipeline<'a> {
                 .unwrap();
 
             // Extract data from master activity and put it into route
-            route.polyline = master_activity.map.polyline.clone();
-            route.meters_climbed_per_km = master_activity.total_elevation_gain / master_activity.distance;
             route.master_activity_id = master_activity._id as DocumentId;
 
             // Get all matched activities and fill in all the efforts

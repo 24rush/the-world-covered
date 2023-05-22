@@ -1,4 +1,4 @@
-use crate::{data_types::common::Identifiable, database::mongodb::bson::Bson};
+use crate::{data_types::{common::Identifiable}, database::mongodb::bson::Bson};
 use mongodb::{
     bson::{self, doc, Document},
     options::{FindOptions, ReplaceOptions},
@@ -26,7 +26,7 @@ impl MongoConnection {
         self.database.collection(name)
     }
 
-    pub async fn max<T: DeserializeOwned + Unpin + Send + Sync>(
+    pub async fn max<T: DeserializeOwned + Unpin + Send + Sync + std::fmt::Debug>(
         &self,
         collection: &Collection<T>,
         query: Document,
@@ -50,6 +50,14 @@ impl MongoConnection {
         }
 
         None
+    }
+
+    pub async fn aggregate<T: DeserializeOwned + Unpin + Send + Sync>(
+        &self,
+        collection: &Collection<T>,
+        query: Vec<Document>,
+    ) -> mongodb::Cursor<Document> {
+        collection.aggregate(query, None).await.ok().unwrap()
     }
 
     pub async fn find<T: DeserializeOwned + Unpin + Send + Sync>(

@@ -15,7 +15,7 @@ use strava::api::StravaApi;
 
 use crate::{database::strava_db::ResourceType, util::logging};
 
-mod data_types;
+pub mod data_types;
 mod database;
 mod strava;
 mod util;
@@ -55,6 +55,10 @@ impl App {
         }
 
         None
+    }
+
+    pub async fn query_activities(&self, query: &String) -> Vec<Activity> {
+        self.strava_db.query_activities(query).await
     }
 
     pub async fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
@@ -104,7 +108,7 @@ impl App {
         .start(
             self.loggedin_athlete_id.unwrap(),
             &DataCreationPipelineOptions {
-                commonalities: false,
+                commonalities: true,
                 route_processor: true
             },
         )

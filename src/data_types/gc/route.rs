@@ -13,11 +13,8 @@ pub struct Route {
     pub _id: f64,
     pub athlete_id: AthleteId,
     pub activities: Vec<DocumentId>,
-    pub master_activity_id: DocumentId,
-    pub polyline: String,
-    pub segment_ids: Vec<DocumentId>,
-    
-    pub meters_climbed_per_km: f32,
+    pub master_activity_id: DocumentId, 
+    pub segment_ids: Vec<DocumentId>,    
     pub gradients: Vec<Gradient>    
 }
 
