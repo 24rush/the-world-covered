@@ -1,5 +1,5 @@
 use data_types::{
-    gc::route::Route,
+    gc::{route::Route, effort::Effort},
     strava::{
         activity::Activity,
         athlete::{AthleteData, AthleteId},
@@ -7,6 +7,7 @@ use data_types::{
 };
 use database::{gc_db::GCDB, strava_db::StravaDB};
 use maintenance::db_integrity_checks::Options;
+use mongodb::bson;
 use util::facilities::{DependenciesBuilder};
 
 use crate::maintenance::db_integrity_checks::DBIntegrityChecker;
@@ -57,8 +58,12 @@ impl App {
         None
     }
 
-    pub async fn query_activities(&self, query: &String) -> Vec<Activity> {
-        self.strava_db.query_activities(query).await
+    pub async fn query_activities(&self, stages: Vec<bson::Document>) -> Vec<Activity> {
+        self.strava_db.query_activities(stages).await
+    }
+
+    pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {
+        self.gc_db.query_efforts(stages).await
     }
 
     pub async fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {

@@ -79,32 +79,23 @@ impl StravaDB {
             .await
     }
 
-    pub async fn query_activities(&self, query: &String) -> Vec<Activity> {
+    pub async fn query_activities(&self, stages: Vec<bson::Document>) -> Vec<Activity> {
         let mut act_ids: Vec<Activity> = Vec::new();
 
-        let json: Vec<serde_json::Map<String, serde_json::Value>> =
-            serde_json::from_str(query.as_str()).unwrap();
-            
-        let mut bsons: Vec<bson::Document> = Vec::new();
-        for key in &json {
-            let bson = bson::to_document(key).unwrap();
-            
-            bsons.push(bson);
-        };
-    
-        let mut cursor = self.db_conn
-            .aggregate(&self.colls.typed_activities, bsons)
+        let mut cursor = self
+            .db_conn
+            .aggregate(&self.colls.typed_activities, stages)
             .await;
 
         while cursor.advance().await.unwrap() {
-            let doc = cursor.deserialize_current().unwrap();    
-            let mut activity: Activity = bson::from_bson(bson::Bson::Document(doc)).unwrap();   
-          
+            let doc = cursor.deserialize_current().unwrap();
+            let mut activity: Activity = bson::from_bson(bson::Bson::Document(doc)).unwrap();
+
             if let Some(effort) = activity.segment_efforts.get(0) {
                 if let Some(effort_country) = &effort.segment.country {
                     activity.location_country = effort_country.to_string();
                 }
-                
+
                 if let Some(effort_city) = &effort.segment.city {
                     activity.location_city = Some(effort_city.to_string());
                 }

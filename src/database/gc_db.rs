@@ -1,4 +1,4 @@
-use mongodb::{Collection, bson::doc};
+use mongodb::{Collection, bson::{doc, self}};
 
 use crate::data_types::gc::{route::Route, segment::{Segment}, effort::Effort};
 
@@ -51,5 +51,23 @@ impl GCDB {
     pub async fn get_routes(&self, ath_id: i64) -> mongodb::Cursor<Route> {
         self.db_conn
             .find::<Route>(&self.colls.routes, doc! {"athlete_id": ath_id}).await
+    }
+
+    pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {
+        let mut efforts: Vec<Effort> = Vec::new();
+
+        let mut cursor = self
+            .db_conn
+            .aggregate(&self.colls.efforts, stages)
+            .await;
+
+        while cursor.advance().await.unwrap() {
+            let doc = cursor.deserialize_current().unwrap();
+            let effort: Effort = bson::from_bson(bson::Bson::Document(doc)).unwrap();
+
+            efforts.push(effort);
+        }
+
+        efforts
     }
 }

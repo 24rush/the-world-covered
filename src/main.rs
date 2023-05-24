@@ -1,4 +1,5 @@
 use ground_covered::App;
+use mongodb::bson::{self};
 use rocket::http::{ContentType, Status};
 
 #[macro_use]
@@ -68,17 +69,40 @@ async fn activities(act_id: &str) -> (Status, (ContentType, String)) {
     (Status::NotFound, (ContentType::Text, String::new()))
 }
 
-#[post("/query_activities", data = "<query>")]
-async fn query_activities(query: String) -> (Status, (ContentType, String)) {    
-    let app = App::anonym_athlete().await;
-    let activities = app.query_activities(&query).await;
+fn parse_query_to_bson(query: &String) -> Vec<bson::Document> {
+    let json: Vec<serde_json::Map<String, serde_json::Value>> =
+        serde_json::from_str(query.as_str()).unwrap();
 
+    let mut bsons: Vec<bson::Document> = Vec::new();
+    for key in &json {
+        let bson = bson::to_document(key).unwrap();
+
+        bsons.push(bson);
+    }
+
+    bsons
+}
+
+#[post("/query_activities", data = "<query>")]
+async fn query_activities(query: String) -> (Status, (ContentType, String)) {
+    let app = App::anonym_athlete().await;
+    let activities = app.query_activities(parse_query_to_bson(&query)).await;
     (
         Status::Ok,
         (
             ContentType::JSON,
             serde_json::to_string(&activities).unwrap(),
         ),
+    )
+}
+
+#[post("/query_efforts", data = "<query>")]
+async fn query_efforts(query: String) -> (Status, (ContentType, String)) {
+    let app = App::anonym_athlete().await;
+    let efforts = app.query_efforts(parse_query_to_bson(&query)).await;
+    (
+        Status::Ok,
+        (ContentType::JSON, serde_json::to_string(&efforts).unwrap()),
     )
 }
 
@@ -96,6 +120,6 @@ async fn main() {
 fn rocket() -> _ {
     rocket::build().attach(Cors).mount(
         "/",
-        routes![routes, activities, query_activities, all_options],
+        routes![routes, activities, query_activities, query_efforts, all_options],
     )
 }
