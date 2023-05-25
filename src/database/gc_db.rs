@@ -36,6 +36,10 @@ impl GCDB {
         self.db_conn.remove_all(&self.colls.segments).await;
     }
 
+    pub async fn clear_efforts(&self) {
+        self.db_conn.remove_all(&self.colls.efforts).await;
+    }
+
     pub async fn update_segment(&self, segment: &Segment) {
         self.db_conn.upsert_one(&self.colls.segments, segment).await;
     }

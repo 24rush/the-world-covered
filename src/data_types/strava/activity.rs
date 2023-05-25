@@ -7,6 +7,8 @@ use super::common::{Map, ResourceId};
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Segment {
     pub id: DocumentId,
+    pub distance: f32,
+    pub average_grade: f32,
     pub city: Option<String>,
     pub country: Option<String>
 }
@@ -16,11 +18,13 @@ pub struct Effort {
     pub id: DocumentId,
     pub athlete: ResourceId,
     pub activity: ResourceId,
+    pub name: String,
     pub segment: Segment,
 
     pub moving_time: i32,
     pub start_index: i32,
     pub end_index: i32,
+    pub start_date_local: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -32,6 +36,7 @@ pub struct Activity {
     pub r#type: String,
 
     pub map: Map,
+    pub elapsed_time: i32,
     pub total_elevation_gain: f32,
     
     pub athlete_count: u8,

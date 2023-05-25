@@ -54,7 +54,8 @@ impl<'a> DataCreationPipeline<'a> {
 
         if options.route_processor {
             // 2 //
-            // Clear previous segments
+            // Clear previous segments and efforts
+            self.dependencies.gc_db().clear_efforts().await;
             self.dependencies.gc_db().clear_segments().await;
 
             // Using created routes, run RouteProcessor => segments collections, updates route collection
@@ -137,6 +138,7 @@ impl<'a> DataCreationPipeline<'a> {
                         activity_id: effort.activity.id,
 
                         moving_time: effort.moving_time,
+                        start_date_local: effort.start_date_local.clone(),
                         distance_from_start: telemetry.distance.data[effort.start_index as usize],
                     })
                 });

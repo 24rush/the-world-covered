@@ -10,7 +10,8 @@ pub struct Effort {
     pub activity_id: DocumentId,
     pub moving_time: i32,
     
-    pub distance_from_start: f32
+    pub distance_from_start: f32,
+    pub start_date_local: String
 }
 
 impl Identifiable for Effort {
