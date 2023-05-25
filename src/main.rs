@@ -36,24 +36,6 @@ fn all_options() {
     /* Intentionally left empty */
 }
 
-#[get("/routes/<athlete_id>")]
-async fn routes(athlete_id: &str) -> (Status, (ContentType, String)) {
-    if let Ok(ath_id) = athlete_id.parse::<i64>() {
-        if let Some(app) = App::with_athlete(ath_id).await {
-            if let Some(_) = app.get_athlete_data(ath_id).await {
-                let routes = app.get_routes(ath_id).await;
-
-                return (
-                    Status::Ok,
-                    (ContentType::JSON, serde_json::to_string(&routes).unwrap()),
-                );
-            }
-        }
-    }
-
-    (Status::NotFound, (ContentType::Text, String::new()))
-}
-
 #[get("/activities/<act_id>")]
 async fn activities(act_id: &str) -> (Status, (ContentType, String)) {
     if let Ok(act_id) = act_id.parse::<i64>() {
@@ -106,6 +88,16 @@ async fn query_efforts(query: String) -> (Status, (ContentType, String)) {
     )
 }
 
+#[post("/query_routes", data = "<query>")]
+async fn query_routes(query: String) -> (Status, (ContentType, String)) {
+    let app = App::anonym_athlete().await;
+    let efforts = app.query_routes(parse_query_to_bson(&query)).await;
+    (
+        Status::Ok,
+        (ContentType::JSON, serde_json::to_string(&efforts).unwrap()),
+    )
+}
+
 /*
 #[tokio::main]
 async fn main() {
@@ -120,6 +112,12 @@ async fn main() {
 fn rocket() -> _ {
     rocket::build().attach(Cors).mount(
         "/",
-        routes![routes, activities, query_activities, query_efforts, all_options],
+        routes![
+            activities,
+            query_routes,
+            query_activities,
+            query_efforts,
+            all_options
+        ],
     )
 }

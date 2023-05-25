@@ -1,4 +1,4 @@
-use crate::{data_types::{common::Identifiable}, database::mongodb::bson::Bson};
+use crate::{data_types::common::Identifiable, database::mongodb::bson::Bson};
 use mongodb::{
     bson::{self, doc, Document},
     options::{FindOptions, ReplaceOptions},
@@ -173,5 +173,27 @@ impl MongoConnection {
         }
 
         return false;
+    }
+
+    // To be used with limit
+    pub async fn query<T: DeserializeOwned + Unpin + Send + Sync + std::fmt::Debug>(
+        &self,
+        collection: &Collection<T>,
+        stages: Vec<bson::Document>,
+    ) -> Vec<T> {
+        let mut results: Vec<T> = Vec::new();
+
+        let cursor = collection.aggregate(stages, None).await;
+
+        if let Ok(mut cursor_res) = cursor {
+            while cursor_res.advance().await.unwrap() {
+                let doc = cursor_res.deserialize_current().unwrap();
+                let effort: T = bson::from_bson(bson::Bson::Document(doc)).unwrap();
+
+                results.push(effort);
+            }
+        }
+
+        results
     }
 }

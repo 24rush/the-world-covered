@@ -1,5 +1,4 @@
 use mongodb::{Collection, bson::{doc, self}};
-
 use crate::data_types::gc::{route::Route, segment::{Segment}, effort::Effort};
 
 use super::mongodb::MongoConnection;
@@ -58,20 +57,10 @@ impl GCDB {
     }
 
     pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {
-        let mut efforts: Vec<Effort> = Vec::new();
+        self.db_conn.query(&self.colls.efforts, stages).await
+    }
 
-        let mut cursor = self
-            .db_conn
-            .aggregate(&self.colls.efforts, stages)
-            .await;
-
-        while cursor.advance().await.unwrap() {
-            let doc = cursor.deserialize_current().unwrap();
-            let effort: Effort = bson::from_bson(bson::Bson::Document(doc)).unwrap();
-
-            efforts.push(effort);
-        }
-
-        efforts
+    pub async fn query_routes(&self, stages: Vec<bson::Document>) -> Vec<Route> {
+        self.db_conn.query(&self.colls.routes, stages).await
     }
 }
