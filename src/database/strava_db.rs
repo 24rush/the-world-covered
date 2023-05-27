@@ -3,13 +3,15 @@ use mongodb::{
     Collection,
 };
 
-use crate::data_types::{
-    common::{DocumentId, Identifiable},
-    strava::{
-        activity::Activity,
-        athlete::{AthleteData, AthleteTokens},
-        segment::Segment,
-        telemetry::Telemetry,
+use crate::{
+    data_types::{
+        common::{DocumentId, Identifiable},
+        strava::{
+            activity::Activity,
+            athlete::{AthleteData, AthleteTokens},
+            segment::Segment,
+            telemetry::Telemetry,
+        },
     },
 };
 
@@ -151,13 +153,15 @@ impl StravaDB {
         &self,
         ids: &Vec<DocumentId>,
     ) -> Option<Activity> {
-        self.db_conn
-            .max::<Activity>(
-                &self.colls.typed_activities,
-                doc! {"_id": {"$in": ids}},
-                "distance",
-            )
-            .await
+
+        self.query_activities(Vec::from([
+            doc! {"$match": {"_id": {"$in": ids}}},
+            doc! {"$sort": { "distance": -1 } },
+            doc! {"$limit": 1},
+        ]))
+        .await
+        .get(0)
+        .cloned()
     }
 
     pub async fn get_telemetry_by_id(&self, id: i64) -> Option<Telemetry> {

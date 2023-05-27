@@ -7,8 +7,8 @@ use super::common::{Map, ResourceId};
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Segment {
     pub id: DocumentId,
-    pub distance: f32,
     pub average_grade: f32,
+    pub distance: f32,
     pub city: Option<String>,
     pub country: Option<String>
 }
@@ -40,8 +40,10 @@ pub struct Activity {
     pub total_elevation_gain: f32,
     
     pub athlete_count: u8,
+    pub description: Option<String>,
     pub location_city: Option<String>,
     pub location_country: String,
+    pub start_date_local: String,
 }
 
 impl crate::data_types::common::Identifiable for Activity {

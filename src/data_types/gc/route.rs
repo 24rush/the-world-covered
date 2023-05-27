@@ -8,13 +8,25 @@ pub struct Gradient {
     pub gradient: f32
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Route {
     pub _id: f64,
+    pub master_activity_id: DocumentId,     
+    pub r#type: String,
+
     pub athlete_id: AthleteId,
+    
     pub activities: Vec<DocumentId>,
-    pub master_activity_id: DocumentId, 
-    pub segment_ids: Vec<DocumentId>,    
+
+    pub distance: f32,
+    pub average_speed: f32,
+    pub total_elevation_gain: f32,
+
+    pub description: Option<String>,
+    pub location_city: Option<String>,
+    pub location_country: String,
+    pub polyline: String,    
+
     pub gradients: Vec<Gradient>    
 }
 
