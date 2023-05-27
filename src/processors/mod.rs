@@ -1,5 +1,5 @@
-use geo_types:: Coord;
-use std::collections::{HashMap};
+use geo_types::Coord;
+use std::{collections::HashMap};
 
 use crate::{
     data_types::{
@@ -7,20 +7,20 @@ use crate::{
         gc::{effort::Effort, segment::Segment},
         strava::athlete::AthleteId,
     },
-    util::{
-        benchmark::Benchmark,
-        facilities::{Facilities, Required},
-    },
+    logln,
+    util::facilities::{Facilities, Required},
 };
 
-use self::commonality::Commonality;
+use self::{commonality::Commonality, statistics::Statistics};
 
 pub mod commonality;
 pub mod gradient_finder;
+pub mod statistics;
 
 pub struct DataCreationPipelineOptions {
     pub commonalities: bool,
     pub route_processor: bool,
+    pub statistics: bool,
 }
 
 pub struct DataCreationPipeline<'a> {
@@ -40,7 +40,7 @@ impl<'a> DataCreationPipeline<'a> {
         }
     }
 
-    pub async fn start(&mut self, athlete_id: AthleteId, options: &DataCreationPipelineOptions) {
+    pub async fn start(&'a mut self, athlete_id: AthleteId, options: &DataCreationPipelineOptions) {
         self.athlete_id = athlete_id;
 
         if options.commonalities {
@@ -61,11 +61,20 @@ impl<'a> DataCreationPipeline<'a> {
             // Using created routes, run RouteProcessor => segments collections, updates route collection
             self.run_route_processor().await;
         }
+
+        if options.statistics {
+            // 3 //
+            // Clear previous statistics
+
+            // Create new statistics
+            let statistics = Statistics::new(self.dependencies);
+
+            let yearly_stats = statistics.collect_yearly_stats(self.athlete_id).await;
+            logln!("Yearly stats {:?}", yearly_stats);
+        }
     }
 
     async fn run_commonalities(&self) {
-        Benchmark::start("commonalities");
-
         let mut processor: Commonality = Default::default();
         let mut telemetries = self
             .dependencies
@@ -76,31 +85,44 @@ impl<'a> DataCreationPipeline<'a> {
         let mut items_to_process = 0;
         while telemetries.advance().await.unwrap() {
             let telemetry = telemetries.deserialize_current().unwrap();
-
-            if items_to_process >= 50 {
-                break;
+        
+            if telemetry.latlng.data.len() == 0 {
+                continue;
             }
 
             processor.process(&telemetry);
             items_to_process += 1;
+
+            if items_to_process >= 5000 {
+                break;
+            }
         }
 
         for mut route in processor.end_session() {
-            // Mark the routes as being the athlete's
+            // Mark the owner of the route so we can retrieve them later in the following processors
             route.athlete_id = self.athlete_id;
             self.dependencies.gc_db().update_route(&route).await;
         }
     }
 
     async fn run_route_processor(&self) {
-        let mut segments_in_master_activity: HashMap<DocumentId, Segment> = HashMap::new();
-        let mut efforts_in_all_activities: Vec<Effort> = Vec::new();
+        struct EffortSegmentDetails {
+            pub segment: Segment,
+            pub distance: f32,
+            pub activity_id: DocumentId,
+            pub start_index: i32,
+            pub end_index: i32,
+        }
+
+        let mut segments_in_matched_activities: HashMap<DocumentId, EffortSegmentDetails> =
+            HashMap::new();
 
         let mut routes = self.dependencies.gc_db().get_routes(self.athlete_id).await;
 
         while routes.advance().await.unwrap() {
+            let mut efforts_in_matched_activities: Vec<Effort> = Vec::new();
             let mut route = routes.deserialize_current().unwrap();
-            
+
             // Find the master activity of this routes: the longest one from the matched ones
             let master_activity = self
                 .dependencies
@@ -111,6 +133,23 @@ impl<'a> DataCreationPipeline<'a> {
 
             // Extract data from master activity and put it into route
             route.master_activity_id = master_activity._id as DocumentId;
+            route.polyline = master_activity.map.polyline.to_string();
+            route.r#type = master_activity.r#type.to_string();
+            route.distance = master_activity.distance;
+            route.average_speed = master_activity.average_speed;
+            route.total_elevation_gain = master_activity.total_elevation_gain;
+            route.polyline = master_activity.map.polyline.to_string();
+            route.description = Some(master_activity.description.unwrap_or("".to_string()).to_string());
+
+            if let Some(effort) = master_activity.segment_efforts.get(0) {
+                if let Some(effort_country) = &effort.segment.country {
+                    route.location_country = effort_country.to_string();
+                }
+
+                if let Some(effort_city) = &effort.segment.city {
+                    route.location_city = Some(effort_city.to_string());
+                }
+            }
 
             // Get all matched activities and fill in all the efforts
             let mut activities = self
@@ -131,7 +170,7 @@ impl<'a> DataCreationPipeline<'a> {
                 // Populate efforts collection
                 activity.segment_efforts.iter().for_each(|effort| {
                     // Extract segment effort
-                    efforts_in_all_activities.push(Effort {
+                    efforts_in_matched_activities.push(Effort {
                         _id: effort.id as f64,
                         athlete_id: effort.athlete.id,
                         segment_id: effort.segment.id,
@@ -140,10 +179,31 @@ impl<'a> DataCreationPipeline<'a> {
                         moving_time: effort.moving_time,
                         start_date_local: effort.start_date_local.clone(),
                         distance_from_start: telemetry.distance.data[effort.start_index as usize],
-                    })
+                    });
+
+                    // Update the segment if we found only a shorter one
+                    let existing_segment = segments_in_matched_activities.get(&effort.segment.id);
+                    if let Some(segment) = existing_segment {
+                        if segment.distance < effort.segment.distance {
+                            return;
+                        }
+                    }
+
+                    segments_in_matched_activities
+                        .entry(effort.segment.id)
+                        .or_insert(EffortSegmentDetails {
+                            segment: Segment {
+                                _id: effort.segment.id as f64,
+                                ..Default::default()
+                            },
+                            activity_id: effort.activity.id,
+                            start_index: effort.start_index,
+                            end_index: effort.end_index,
+                            distance: 0.0,
+                        });
                 });
 
-                if activity.as_i64() == route.master_activity_id {
+                if false && activity.as_i64() == route.master_activity_id {
                     let gradients = gradient_finder::GradientFinder::find_gradients(&telemetry);
 
                     if gradients.len() > 0 {
@@ -152,77 +212,52 @@ impl<'a> DataCreationPipeline<'a> {
                 }
             }
 
-            // Collect segment_ids from master activity's efforts (effort 1-1 segment)
-            for effort_in_master in &master_activity.segment_efforts {
-                let seg_id = effort_in_master.segment.id as DocumentId;
-
-                if segments_in_master_activity.contains_key(&seg_id) {
-                    continue;
-                }
-
-                if let Some(db_segment) = self.dependencies.strava_db().get_segment(seg_id).await {
-                    segments_in_master_activity.insert(
-                        seg_id,
-                        Segment {
-                            _id: seg_id as f64,
-                            polyline: db_segment.map.polyline,
-                            kom: db_segment.xoms.kom,
-                            qom: db_segment.xoms.qom,
-                            time_to_xom: 0,
-                            start_index: effort_in_master.start_index,
-                            end_index: effort_in_master.end_index,
-                        },
-                    );
-                } else {
-                    /*logln!(
-                        "WARNING: Cannot find segment {} in DB for activity: {}",
-                        seg_id,
-                        master_activity.as_i64()
-                    );*/
-
-                    let telemetry = self
-                        .dependencies
-                        .strava_db()
-                        .get_telemetry_by_id(master_activity.as_i64())
-                        .await
-                        .unwrap();
-
-                    let telemetry_data = &telemetry.latlng.data;
-                    let coordinates: Vec<Coord> = (effort_in_master.start_index as usize
-                        ..=effort_in_master.end_index as usize)
-                        .map(|index| {
-                            let x = telemetry_data[index][1] as f64;
-                            let y = telemetry_data[index][0] as f64;
-
-                            Coord { x, y }
-                        })
-                        .collect();
-
-                    segments_in_master_activity.insert(
-                        seg_id,
-                        Segment {
-                            _id: seg_id as f64,
-                            polyline: polyline::encode_coordinates(coordinates, 5)
-                                .unwrap_or("".to_string()),
-                            kom: "0".to_string(), // Missing data
-                            qom: "0".to_string(), // Missing data
-                            time_to_xom: 0,       // Missing data
-                            start_index: effort_in_master.start_index,
-                            end_index: effort_in_master.end_index,
-                        },
-                    );
-                }
-            }
-
             self.dependencies.gc_db().update_route(&route).await;
+
+            for effort in efforts_in_matched_activities {
+                self.dependencies.gc_db().update_effort(&effort).await;
+            }
         }
 
-        for segment in segments_in_master_activity {
-            self.dependencies.gc_db().update_segment(&segment.1).await;
+        // Collect segment_ids from master activity's efforts (effort 1-1 segment)
+        for segment_effort in &mut segments_in_matched_activities {
+            let seg_id = *segment_effort.0 as DocumentId;
+            let mut seg_details = segment_effort.1;
+
+            // If the segment is already in the strava DB, pick up the info from there
+            if let Some(db_segment) = self.dependencies.strava_db().get_segment(seg_id).await {
+                seg_details.distance = db_segment.distance;
+                seg_details.segment.polyline = db_segment.map.polyline.to_string();
+            } else {
+                // Get the telemetry for the activity and compute the polyline
+                let telemetry = self
+                    .dependencies
+                    .strava_db()
+                    .get_telemetry_by_id(seg_details.activity_id)
+                    .await
+                    .unwrap();
+
+                let telemetry_data = &telemetry.latlng.data;
+                let coordinates: Vec<Coord> = (seg_details.start_index as usize
+                    ..=seg_details.end_index as usize)
+                    .map(|index| {
+                        let x = telemetry_data[index][1] as f64;
+                        let y = telemetry_data[index][0] as f64;
+
+                        Coord { x, y }
+                    })
+                    .collect();
+
+                seg_details.segment.polyline =
+                    polyline::encode_coordinates(coordinates, 5).unwrap_or("".to_string());
+            }
         }
 
-        for effort in efforts_in_all_activities {
-            self.dependencies.gc_db().update_effort(&effort).await;
+        for segment in segments_in_matched_activities {
+            self.dependencies
+                .gc_db()
+                .update_segment(&segment.1.segment)
+                .await;
         }
     }
 }

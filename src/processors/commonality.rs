@@ -1,12 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+};
 
-use crate::{
-    data_types::{
-        common::{DocumentId, Identifiable},
-        gc::route::Route,
-        strava::telemetry::Telemetry,
-    },
-    logln,
+use crate::data_types::{
+    common::{DocumentId, Identifiable},
+    gc::route::Route,
+    strava::telemetry::Telemetry,
 };
 
 // PUBLIC Types
@@ -20,7 +20,7 @@ type Telem2TelemMatchResult = (i32, DocumentId, DocumentId);
 type MatchedTelemetriesResult = Vec<HashSet<DocumentId>>;
 
 const DIGIT_ACCURACY: f32 = 3.5;
-const MATCH_THRESHOLD: i32 = 90;
+const MATCH_THRESHOLD: i32 = 85;
 
 #[derive(Default, Debug)]
 struct ActivityOccurence {
@@ -35,8 +35,9 @@ pub struct Commonality<'a> {
     unique_points: HashMap<String, ActivityTypeData>,
     act_to_act_points: HashMap<DocumentId, HashMap<DocumentId, u32>>,
 
-    act_count_processed: f32,
     points_total: u32,
+    acts_total: u32,
+    acts_unique: HashSet<DocumentId>,
 }
 
 impl<'a> Commonality<'a> {
@@ -54,7 +55,6 @@ impl<'a> Commonality<'a> {
 
         for telemetry_ref in &references {
             self.process(&telemetry_ref);
-            self.act_count_processed += 1.0;
         }
 
         let results = self.generate_match_results();
@@ -63,10 +63,13 @@ impl<'a> Commonality<'a> {
 
     // Functions using streamed data
     pub fn process(&mut self, telemetry_ref: &Telemetry) {
-        let telem_id = telemetry_ref.as_i64();
+        let src_id = telemetry_ref.as_i64();
         let telem_data_size = telemetry_ref.latlng.data.len();
 
-        *self.data_size.entry(telem_id).or_insert(telem_data_size) = telem_data_size;
+        self.acts_total += 1;
+        self.acts_unique.insert(src_id);
+
+        *self.data_size.entry(src_id).or_insert(telem_data_size) = telem_data_size;
 
         for latlngs in &telemetry_ref.latlng.data {
             self.points_total += 1;
@@ -89,19 +92,19 @@ impl<'a> Commonality<'a> {
                 .or_default()
                 .set_activities;
 
-            set_telem_ids.insert(telem_id);
+            set_telem_ids.insert(src_id);
 
             let vec_act_ids: Vec<&i64> = set_telem_ids.iter().collect();
 
             for i in 0..vec_act_ids.len() {
                 let dest_act = *vec_act_ids[i];
 
-                if telem_id == dest_act {
-                    continue;
+                if src_id == dest_act {
+                    //continue;
                 }
 
                 self.act_to_act_points
-                    .entry(telem_id)
+                    .entry(src_id)
                     .or_insert(HashMap::from([(dest_act, 0)]))
                     .entry(dest_act)
                     .and_modify(|v| *v += 1);
@@ -110,8 +113,9 @@ impl<'a> Commonality<'a> {
     }
 
     pub fn end_session(&mut self) -> MatchedRoutesResult {
-        logln!("Processed {} activities", { self.act_count_processed });
+        println!("Processed {} {}", self.acts_total, self.acts_unique.len());
 
+        self.acts_total = 0;
         let results = self.generate_match_results();
         let merged_routes = self.merge_results(&results);
 
@@ -124,10 +128,8 @@ impl<'a> Commonality<'a> {
                 Route {
                     _id: route_idx as f64,
                     activities: result.iter().map(|act_id| *act_id).collect(),
-                    athlete_id: 0,
-                    master_activity_id: 0,
-                    segment_ids: Vec::new(),
-                    gradients: Vec::new()
+
+                    ..Default::default()
                 }
             })
             .collect()
@@ -161,33 +163,108 @@ impl<'a> Commonality<'a> {
     }
 
     fn merge_results(&self, results: &Vec<Telem2TelemMatchResult>) -> MatchedTelemetriesResult {
-        let mut merge_result: MatchedTelemetriesResult = Vec::new();
+        println!("{:#?}", results);
+
+        let mut merge_result: MatchedTelemetriesResult = Vec::new(); // Vector of unique IDs
+
+        type GroupId = DocumentId;
+
+        let mut act_to_group: HashMap<DocumentId, GroupId> = HashMap::new(); // Existing activity to which group it is allocated
+        let mut groups: HashMap<GroupId, Cell<HashSet<DocumentId>>> = HashMap::new(); // Group composition
+
+        let mut group_id_counter: GroupId = 1;
 
         for two_telem_result in results {
+            let src_act_id = two_telem_result.1;
+            let dest_act_id = two_telem_result.2;
+
+            let src_group_id = *(act_to_group.get(&src_act_id).unwrap_or(&0));
+            let dest_group_id = *(act_to_group.get(&dest_act_id).unwrap_or(&0));
+
+            let src_has_group = src_group_id != 0;
+            let dest_has_group = dest_group_id != 0;
+
             if two_telem_result.0 < MATCH_THRESHOLD {
+                if !src_has_group {
+                    let group_members = groups.entry(group_id_counter).or_default();
+                    group_members.get_mut().insert(src_act_id);
+                    act_to_group.insert(src_act_id, group_id_counter);
+
+                    group_id_counter += 1;
+                }
+
+                if !dest_has_group {
+                    let group_members = groups.entry(group_id_counter).or_default();
+                    group_members.get_mut().insert(dest_act_id);
+                    act_to_group.insert(dest_act_id, group_id_counter);
+
+                    group_id_counter += 1;
+                }
+
                 continue;
             }
 
-            let mut group_found = false;
+            if !src_has_group && !dest_has_group {
+                // None exist - create new group with just the 2 of them
+                act_to_group.insert(src_act_id, group_id_counter);
+                act_to_group.insert(dest_act_id, group_id_counter);
 
-            for match_group in merge_result.iter_mut() {
-                if match_group.contains(&two_telem_result.1)
-                    || match_group.contains(&two_telem_result.2)
-                {
-                    group_found = true;
+                let group_members = groups.entry(group_id_counter).or_default();
 
-                    match_group.insert(two_telem_result.1);
-                    match_group.insert(two_telem_result.2);
+                group_members.get_mut().insert(src_act_id);
+                group_members.get_mut().insert(dest_act_id);
+
+                group_id_counter += 1;
+            } else if src_has_group && dest_has_group {
+                // Both are in groups
+                if src_group_id != dest_group_id {
+                    // Merge src and dest groups
+                    let dest_group = groups.get(&dest_group_id).unwrap().take();
+                    let src_group = groups.get_mut(&src_group_id).unwrap();
+
+                    for dest_member_id in dest_group.iter() {
+                        src_group.get_mut().insert(*dest_member_id);
+                        act_to_group.insert(*dest_member_id, src_group_id);
+                    }
                 }
-            }
-
-            if !group_found {
-                merge_result.push(HashSet::from([two_telem_result.1, two_telem_result.2]));
+            } else if src_has_group {
+                groups
+                    .entry(src_group_id)
+                    .or_default()
+                    .get_mut()
+                    .insert(dest_act_id);
+                act_to_group.insert(dest_act_id, src_group_id);
+            } else if dest_has_group {
+                groups
+                    .entry(dest_group_id)
+                    .or_default()
+                    .get_mut()
+                    .insert(src_act_id);
+                act_to_group.insert(src_act_id, dest_group_id);
             }
         }
 
-        merge_result.iter().for_each(|v| logln!("{:?}", v));
+        let mut count = 0;
+        let mut resulting_set: HashSet<DocumentId> = HashSet::new();
 
+        for (_, group) in groups {
+            let group = group.take();
+
+            if group.len() == 0 {
+                continue;
+            }
+
+            for item in &group {
+                resulting_set.insert(*item);
+            }
+
+            merge_result.push(HashSet::from_iter(group.iter().cloned()));
+            count += group.len();
+        }
+
+        println!("{}", count);
+        let diff = self.acts_unique.difference(&resulting_set);
+        println!("diff {:?}", diff);
         merge_result
     }
 
