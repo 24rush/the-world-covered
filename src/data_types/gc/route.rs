@@ -27,7 +27,9 @@ pub struct Route {
     pub location_country: String,
     pub polyline: String,    
 
-    pub gradients: Vec<Gradient>    
+    pub gradients: Vec<Gradient>,
+    pub dist_from_capital: i32,
+    pub center_coord: geo_types::Coord,
 }
 
 impl Identifiable for Route {

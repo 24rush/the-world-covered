@@ -3,6 +3,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 pub mod logging;
 pub mod benchmark;
 pub mod facilities;
+pub mod geo;
 
 pub struct DateTimeUtils {}
 

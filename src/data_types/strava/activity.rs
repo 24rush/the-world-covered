@@ -8,6 +8,7 @@ use super::common::{Map, ResourceId};
 pub struct Segment {
     pub id: DocumentId,
     pub average_grade: f32,
+    pub maximum_grade: f32,
     pub distance: f32,
     pub city: Option<String>,
     pub country: Option<String>

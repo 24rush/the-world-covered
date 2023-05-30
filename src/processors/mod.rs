@@ -1,5 +1,5 @@
 use geo_types::Coord;
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use crate::{
     data_types::{
@@ -8,7 +8,7 @@ use crate::{
         strava::athlete::AthleteId,
     },
     logln,
-    util::facilities::{Facilities, Required},
+    util::{facilities::{Facilities, Required}, geo::GeoUtils},
 };
 
 use self::{commonality::Commonality, statistics::Statistics};
@@ -85,7 +85,7 @@ impl<'a> DataCreationPipeline<'a> {
         let mut items_to_process = 0;
         while telemetries.advance().await.unwrap() {
             let telemetry = telemetries.deserialize_current().unwrap();
-        
+
             if telemetry.latlng.data.len() == 0 {
                 continue;
             }
@@ -93,7 +93,7 @@ impl<'a> DataCreationPipeline<'a> {
             processor.process(&telemetry);
             items_to_process += 1;
 
-            if items_to_process >= 5000 {
+            if items_to_process >= 50 {
                 break;
             }
         }
@@ -139,15 +139,34 @@ impl<'a> DataCreationPipeline<'a> {
             route.average_speed = master_activity.average_speed;
             route.total_elevation_gain = master_activity.total_elevation_gain;
             route.polyline = master_activity.map.polyline.to_string();
-            route.description = Some(master_activity.description.unwrap_or("".to_string()).to_string());
+            route.description = Some(
+                master_activity
+                    .description
+                    .unwrap_or("".to_string())
+                    .to_string(),
+            );
+            route.location_city = master_activity.location_city;
+            route.location_country = master_activity.location_country;
 
-            if let Some(effort) = master_activity.segment_efforts.get(0) {
-                if let Some(effort_country) = &effort.segment.country {
-                    route.location_country = effort_country.to_string();
+            let bbox = GeoUtils::get_bounding_box(&route.polyline);
+            route.center_coord = GeoUtils::get_center_of_bbox(bbox.0, bbox.1);
+
+            // Reference is Bucharest (coordinates opposite)
+            route.dist_from_capital = GeoUtils::distance(route.center_coord, Coord::from((26.096306, 44.439663))) as i32 / 100;
+
+            if let None = route.location_city {
+                if let Some(effort) = master_activity.segment_efforts.get(0) {
+                    if let Some(effort_city) = &effort.segment.city {
+                        route.location_city = Some(effort_city.to_string());
+                    }
                 }
+            }
 
-                if let Some(effort_city) = &effort.segment.city {
-                    route.location_city = Some(effort_city.to_string());
+            if route.location_country == "" {
+                if let Some(effort) = master_activity.segment_efforts.get(0) {
+                    if let Some(effort_country) = &effort.segment.country {
+                        route.location_country = effort_country.to_string();
+                    }
                 }
             }
 
