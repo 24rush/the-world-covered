@@ -3,15 +3,13 @@ use mongodb::{
     Collection,
 };
 
-use crate::{
-    data_types::{
-        common::{DocumentId, Identifiable},
-        strava::{
-            activity::Activity,
-            athlete::{AthleteData, AthleteTokens},
-            segment::Segment,
-            telemetry::Telemetry,
-        },
+use crate::data_types::{
+    common::{DocumentId, Identifiable},
+    strava::{
+        activity::Activity,
+        athlete::{AthleteData, AthleteTokens},
+        segment::Segment,
+        telemetry::Telemetry,
     },
 };
 
@@ -92,17 +90,24 @@ impl StravaDB {
         while cursor.advance().await.unwrap() {
             let doc = cursor.deserialize_current().unwrap();
             let mut activity: Activity = bson::from_bson(bson::Bson::Document(doc)).unwrap();
-
-            if let Some(effort) = activity.segment_efforts.get(0) {
-                if let Some(effort_country) = &effort.segment.country {
-                    activity.location_country = effort_country.to_string();
-                }
-
-                if let Some(effort_city) = &effort.segment.city {
-                    activity.location_city = Some(effort_city.to_string());
+            
+            // Manually fill in location city and country from efforts if not present
+            if let None = activity.location_city {
+                if let Some(effort) = activity.segment_efforts.get(0) {
+                    if let Some(effort_city) = &effort.segment.city {
+                        activity.location_city = Some(effort_city.to_string());
+                    }
                 }
             }
 
+            if activity.location_country == "" {
+                if let Some(effort) = activity.segment_efforts.get(0) {
+                    if let Some(effort_country) = &effort.segment.country {
+                        activity.location_country = effort_country.to_string();
+                    }
+                }
+            }
+      
             act_ids.push(activity);
         }
 
@@ -153,7 +158,6 @@ impl StravaDB {
         &self,
         ids: &Vec<DocumentId>,
     ) -> Option<Activity> {
-
         self.query_activities(Vec::from([
             doc! {"$match": {"_id": {"$in": ids}}},
             doc! {"$sort": { "distance": -1 } },
