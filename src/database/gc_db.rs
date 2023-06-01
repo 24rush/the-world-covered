@@ -60,6 +60,10 @@ impl GCDB {
         self.db_conn.query(&self.colls.efforts, stages).await
     }
 
+    pub async fn query_segments(&self, stages: Vec<bson::Document>) -> Vec<Segment> {
+        self.db_conn.query(&self.colls.segments, stages).await
+    }
+
     pub async fn query_routes(&self, stages: Vec<bson::Document>) -> Vec<Route> {
         self.db_conn.query(&self.colls.routes, stages).await
     }

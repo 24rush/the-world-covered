@@ -1,5 +1,5 @@
 use data_types::{
-    gc::{route::Route, effort::Effort},
+    gc::{route::Route, effort::Effort, segment::Segment},
     strava::{
         activity::Activity,
         athlete::{AthleteData, AthleteId},
@@ -66,6 +66,10 @@ impl App {
         self.gc_db.query_efforts(stages).await
     }
 
+    pub async fn query_segments(&self, stages: Vec<bson::Document>) -> Vec<Segment> {
+        self.gc_db.query_segments(stages).await
+    }
+
     pub async fn query_routes(&self, stages: Vec<bson::Document>) -> Vec<Route> {
         self.gc_db.query_routes(stages).await
     }
@@ -117,9 +121,9 @@ impl App {
         .start(
             self.loggedin_athlete_id.unwrap(),
             &DataCreationPipelineOptions {
-                commonalities: false,
-                route_processor: false,
-                statistics: true
+                commonalities: true,
+                route_processor: true,
+                statistics: false
             },
         )
         .await;
@@ -132,8 +136,8 @@ impl App {
                 .with_strava_db(&self.strava_db)
                 .build(),
             &Options {
-                skip_activity_sync: true,
-                skip_activity_telemetry: true,
+                skip_activity_sync: false,
+                skip_activity_telemetry: false,
                 skip_segment_caching: false,
                 skip_segment_telemetry: true,
             },

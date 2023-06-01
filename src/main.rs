@@ -98,16 +98,29 @@ async fn query_routes(query: String) -> (Status, (ContentType, String)) {
     )
 }
 
+#[post("/query_segments", data = "<query>")]
+async fn query_segments(query: String) -> (Status, (ContentType, String)) {
+    let app = App::anonym_athlete().await;
+    let efforts = app.query_segments(parse_query_to_bson(&query)).await;
+    (
+        Status::Ok,
+        (ContentType::JSON, serde_json::to_string(&efforts).unwrap()),
+    )
+}
+
 /*
 #[tokio::main]
 async fn main() {
+    std::env::set_var("RUST_BACKTRACE", "0");
+
     let app = App::with_athlete(4399230).await;
 
-    //app.unwrap().start_db_integrity_check().await;
-    app.unwrap().start_db_creation().await;
+    app.unwrap().start_db_integrity_check().await;
+    //app.unwrap().start_db_creation().await;
 }
 
 */
+
 #[launch]
 fn rocket() -> _ {
     rocket::build().attach(Cors).mount(
@@ -117,7 +130,9 @@ fn rocket() -> _ {
             query_routes,
             query_activities,
             query_efforts,
+            query_segments,
             all_options
         ],
     )
 }
+
