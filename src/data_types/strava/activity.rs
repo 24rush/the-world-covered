@@ -26,6 +26,9 @@ pub struct Effort {
     pub start_index: i32,
     pub end_index: i32,
     pub start_date_local: String,
+
+    pub start_index_poly: Option<i32>,
+    pub end_index_poly: Option<i32>,    
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

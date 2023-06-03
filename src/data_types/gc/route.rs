@@ -3,9 +3,14 @@ use crate::data_types::{common::{Identifiable, DocumentId}, strava::athlete::Ath
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Gradient {
-    pub start: usize,
-    pub end: usize,
-    pub gradient: f32
+    pub start_index: usize,
+    pub end_index: usize,
+    pub length: f32,
+    pub avg_gradient: f32,
+    pub max_gradient: f32,
+    pub elevation_gain: f32,
+    pub gradient: f32,
+    pub altitudes: Vec<i16>
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]

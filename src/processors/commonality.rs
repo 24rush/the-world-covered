@@ -163,7 +163,7 @@ impl<'a> Commonality<'a> {
     }
 
     fn merge_results(&self, results: &Vec<Telem2TelemMatchResult>) -> MatchedTelemetriesResult {
-        println!("{:#?}", results);
+        //println!("{:#?}", results);
 
         let mut merge_result: MatchedTelemetriesResult = Vec::new(); // Vector of unique IDs
 

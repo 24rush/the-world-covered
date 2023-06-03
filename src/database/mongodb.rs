@@ -130,7 +130,7 @@ impl MongoConnection {
         Some(res.deleted_count > 0)
     }
 
-    pub async fn update_field<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(
+    pub async fn update_field_of_doc_id<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(
         &self,
         key: KT,
         collection: &Collection<T>,
@@ -143,6 +143,32 @@ impl MongoConnection {
         Bson: From<KT> + From<V>,
     {
         let filter = doc! {"_id": key};
+        let update = doc! {"$set": {field:value}};
+
+        Some(
+            collection
+                .update_one(filter, update, None)
+                .await
+                .unwrap()
+                .modified_count
+                > 0,
+        )
+    }
+
+    pub async fn update_field<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(
+        &self,
+        key_path: String,
+        key_value: KT,
+        collection: &Collection<T>,
+        field: &str,
+        value: &V,
+    ) -> Option<bool>
+    where
+        V: std::clone::Clone + Into<Bson>,
+        KT: std::clone::Clone + Into<Bson>,
+        Bson: From<KT> + From<V>,
+    {
+        let filter = doc! {key_path: key_value};
         let update = doc! {"$set": {field:value}};
 
         Some(

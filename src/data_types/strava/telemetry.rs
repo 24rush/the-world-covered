@@ -1,6 +1,6 @@
 use serde_derive::Deserialize;
 
-type LatLng = [f32; 2];
+pub type LatLng = [f32; 2];
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct LatLngData {

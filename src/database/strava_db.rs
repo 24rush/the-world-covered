@@ -6,7 +6,7 @@ use mongodb::{
 use crate::data_types::{
     common::{DocumentId, Identifiable},
     strava::{
-        activity::Activity,
+        activity::{Activity, Effort},
         athlete::{AthleteData, AthleteTokens},
         segment::Segment,
         telemetry::Telemetry,
@@ -89,8 +89,9 @@ impl StravaDB {
 
         while cursor.advance().await.unwrap() {
             let doc = cursor.deserialize_current().unwrap();
-            let mut activity: Activity = bson::from_bson(bson::Bson::Document(doc)).unwrap();
-            
+
+            let mut activity : Activity = bson::from_bson(bson::Bson::Document(doc)).unwrap();
+
             // Manually fill in location city and country from efforts if not present
             if let None = activity.location_city {
                 if let Some(effort) = activity.segment_efforts.get(0) {
@@ -107,7 +108,7 @@ impl StravaDB {
                     }
                 }
             }
-      
+
             act_ids.push(activity);
         }
 
@@ -217,23 +218,55 @@ impl StravaDB {
 
     pub async fn save_after_before_timestamps(
         &self,
-        id: i64,
+        ath_id: i64,
         after_ts: i64,
         before_ts: i64,
     ) -> Option<bool> {
         self.db_conn
-            .update_field(id, &self.colls.typed_athletes, &"before_ts", &before_ts)
+            .update_field_of_doc_id(ath_id, &self.colls.typed_athletes, &"before_ts", &before_ts)
             .await
             .unwrap();
 
         self.db_conn
-            .update_field(id, &self.colls.typed_athletes, &"after_ts", &after_ts)
+            .update_field_of_doc_id(ath_id, &self.colls.typed_athletes, &"after_ts", &after_ts)
             .await
     }
 
     pub async fn set_athlete_data(&self, athlete_data: &AthleteData) -> Option<bool> {
         self.db_conn
             .upsert_one::<AthleteData>(&self.colls.typed_athletes, athlete_data)
+            .await
+    }
+
+    pub async fn update_activity(&self, activity: &Activity) -> Option<bool> {
+        self.db_conn
+            .upsert_one::<Activity>(&self.colls.typed_activities, activity)
+            .await
+    }
+
+    pub async fn update_segment_effort_start_end_poly_indexes(
+        &self,
+        effort: &Effort,
+    ) -> Option<bool> {
+        self.db_conn
+            .update_field(
+                "segment_efforts.id".to_owned(),
+                effort.id,
+                &self.colls.typed_activities,
+                "segment_efforts.$.start_index_poly",
+                &effort.start_index_poly,
+            )
+            .await
+            .unwrap();
+
+        self.db_conn
+            .update_field(
+                "segment_efforts.id".to_owned(),
+                effort.id,
+                &self.colls.typed_activities,
+                "segment_efforts.$.end_index_poly",
+                &effort.end_index_poly,
+            )
             .await
     }
 
@@ -251,7 +284,7 @@ impl StravaDB {
         athlete_tokens: &AthleteTokens,
     ) -> Option<bool> {
         self.db_conn
-            .update_field(
+            .update_field_of_doc_id(
                 id,
                 &self.colls.typed_athletes,
                 "tokens",
