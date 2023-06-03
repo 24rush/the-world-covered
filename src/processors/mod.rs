@@ -4,11 +4,16 @@ use std::collections::HashMap;
 use crate::{
     data_types::{
         common::{DocumentId, Identifiable},
-        gc::{effort::Effort, segment::Segment},
-        strava::athlete::AthleteId,
+        gc::effort::Effort,
+        strava::{
+            athlete::AthleteId,
+        },
     },
     logln,
-    util::{facilities::{Facilities, Required}, geo::GeoUtils},
+    util::{
+        facilities::{Facilities, Required},
+        geo::GeoUtils,
+    },
 };
 
 use self::{commonality::Commonality, statistics::Statistics};
@@ -43,6 +48,13 @@ impl<'a> DataCreationPipeline<'a> {
     pub async fn start(&'a mut self, athlete_id: AthleteId, options: &DataCreationPipelineOptions) {
         self.athlete_id = athlete_id;
 
+        if false {
+            // 0 //
+            // Remap indexes of segments from the whole telemetry to the polyline's telemetry
+            self.run_indexes_remapper().await;
+            return;
+        }
+
         if options.commonalities {
             // 1 //
             // Clear previous results and store latest ones
@@ -54,9 +66,8 @@ impl<'a> DataCreationPipeline<'a> {
 
         if options.route_processor {
             // 2 //
-            // Clear previous segments and efforts
+            // Clear previous efforts
             self.dependencies.gc_db().clear_efforts().await;
-            self.dependencies.gc_db().clear_segments().await;
 
             // Using created routes, run RouteProcessor => segments collections, updates route collection
             self.run_route_processor().await;
@@ -93,7 +104,7 @@ impl<'a> DataCreationPipeline<'a> {
             processor.process(&telemetry);
             items_to_process += 1;
 
-            if items_to_process >= 50 {
+            if items_to_process >= 5 {
                 break;
             }
         }
@@ -107,7 +118,6 @@ impl<'a> DataCreationPipeline<'a> {
 
     async fn run_route_processor(&self) {
         struct EffortSegmentDetails {
-            pub segment: Segment,
             pub distance: f32,
             pub activity_id: DocumentId,
             pub start_index: i32,
@@ -133,7 +143,6 @@ impl<'a> DataCreationPipeline<'a> {
 
             // Extract data from master activity and put it into route
             route.master_activity_id = master_activity._id as DocumentId;
-            route.polyline = master_activity.map.polyline.to_string();
             route.r#type = master_activity.r#type.to_string();
             route.distance = master_activity.distance;
             route.average_speed = master_activity.average_speed;
@@ -152,7 +161,9 @@ impl<'a> DataCreationPipeline<'a> {
             route.center_coord = GeoUtils::get_center_of_bbox(bbox.0, bbox.1);
 
             // Reference is Bucharest (coordinates opposite)
-            route.dist_from_capital = GeoUtils::distance(route.center_coord, Coord::from((26.096306, 44.439663))) as i32 / 100;
+            route.dist_from_capital =
+                GeoUtils::distance(route.center_coord, Coord::from((26.096306, 44.439663))) as i32
+                    / 100;
 
             if let None = route.location_city {
                 if let Some(effort) = master_activity.segment_efforts.get(0) {
@@ -211,10 +222,6 @@ impl<'a> DataCreationPipeline<'a> {
                     segments_in_matched_activities
                         .entry(effort.segment.id)
                         .or_insert(EffortSegmentDetails {
-                            segment: Segment {
-                                _id: effort.segment.id as f64,
-                                ..Default::default()
-                            },
                             activity_id: effort.activity.id,
                             start_index: effort.start_index,
                             end_index: effort.end_index,
@@ -222,10 +229,17 @@ impl<'a> DataCreationPipeline<'a> {
                         });
                 });
 
-                if false && activity.as_i64() == route.master_activity_id {
-                    let gradients = gradient_finder::GradientFinder::find_gradients(&telemetry);
+                // Run GradientFinder
+                if activity.as_i64() == route.master_activity_id {
+                    let mut gradients = gradient_finder::GradientFinder::find_gradients(&telemetry);
 
-                    if gradients.len() > 0 {
+                    if gradients.len() > 0 {                        
+                        let remapped_indexes = GeoUtils::get_index_mapping(&route.polyline, &telemetry.latlng.data);
+                        gradients.iter_mut().for_each(|gradient|{
+                            gradient.start_index = remapped_indexes[gradient.start_index];
+                            gradient.end_index = remapped_indexes[gradient.end_index];
+                        });
+        
                         route.gradients = gradients;
                     }
                 }
@@ -237,46 +251,57 @@ impl<'a> DataCreationPipeline<'a> {
                 self.dependencies.gc_db().update_effort(&effort).await;
             }
         }
+    }
 
-        // Collect segment_ids from master activity's efforts (effort 1-1 segment)
-        for segment_effort in &mut segments_in_matched_activities {
-            let seg_id = *segment_effort.0 as DocumentId;
-            let mut seg_details = segment_effort.1;
+    async fn run_indexes_remapper(&self) {
+        let athlete_acts = self
+            .dependencies
+            .strava_db()
+            .get_athlete_activity_ids(self.athlete_id)
+            .await;
 
-            // If the segment is already in the strava DB, pick up the info from there
-            if let Some(db_segment) = self.dependencies.strava_db().get_segment(seg_id).await {
-                seg_details.distance = db_segment.distance;
-                seg_details.segment.polyline = db_segment.map.polyline.to_string();
-            } else {
-                // Get the telemetry for the activity and compute the polyline
-                let telemetry = self
-                    .dependencies
+        for act_id in athlete_acts {
+            let activity = self
+                .dependencies
+                .strava_db()
+                .get_activity(act_id)
+                .await
+                .unwrap();
+
+            let mut needs_remapping = true;
+
+            for effort in &activity.segment_efforts {
+                if let Some(_) = effort.start_index_poly {
+                    needs_remapping = false;
+                }
+            }
+
+            if !needs_remapping {
+                continue;
+            }
+
+            println!("Remapping {}", act_id);
+
+            let telemetry = self
+                .dependencies
+                .strava_db()
+                .get_telemetry_by_id(activity.as_i64())
+                .await
+                .unwrap();
+
+            let remapped_indexes: Vec<usize> =
+                GeoUtils::get_index_mapping(&activity.map.polyline, &telemetry.latlng.data);
+
+            for mut effort in activity.segment_efforts {
+                effort.start_index_poly = Some(remapped_indexes[effort.start_index as usize] as i32);
+                effort.end_index_poly = Some(remapped_indexes[effort.end_index as usize] as i32);
+
+                self.dependencies
                     .strava_db()
-                    .get_telemetry_by_id(seg_details.activity_id)
+                    .update_segment_effort_start_end_poly_indexes(&effort)
                     .await
                     .unwrap();
-
-                let telemetry_data = &telemetry.latlng.data;
-                let coordinates: Vec<Coord> = (seg_details.start_index as usize
-                    ..=seg_details.end_index as usize)
-                    .map(|index| {
-                        let x = telemetry_data[index][1] as f64;
-                        let y = telemetry_data[index][0] as f64;
-
-                        Coord { x, y }
-                    })
-                    .collect();
-
-                seg_details.segment.polyline =
-                    polyline::encode_coordinates(coordinates, 5).unwrap_or("".to_string());
             }
-        }
-
-        for segment in segments_in_matched_activities {
-            self.dependencies
-                .gc_db()
-                .update_segment(&segment.1.segment)
-                .await;
         }
     }
 }

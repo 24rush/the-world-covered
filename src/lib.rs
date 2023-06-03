@@ -1,5 +1,5 @@
 use data_types::{
-    gc::{route::Route, effort::Effort, segment::Segment},
+    gc::{route::Route, effort::Effort},
     strava::{
         activity::Activity,
         athlete::{AthleteData, AthleteId},
@@ -64,10 +64,6 @@ impl App {
 
     pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {
         self.gc_db.query_efforts(stages).await
-    }
-
-    pub async fn query_segments(&self, stages: Vec<bson::Document>) -> Vec<Segment> {
-        self.gc_db.query_segments(stages).await
     }
 
     pub async fn query_routes(&self, stages: Vec<bson::Document>) -> Vec<Route> {
