@@ -120,13 +120,18 @@ impl GradientFinder {
                             distance_between(curr_gradient_start_index, curr_gradient_end_index);
 
                         if gradient_length > min_gradient_length_for_type(&curr_gradient_type) {
-                            let mut altitudes_sampled: Vec<i16> = vec![telemetry.altitude.data[curr_gradient_start_index] as i16];
+                            // Initialize with first point of altitude
+                            let mut altitude_sampled: Vec<i16> = vec![telemetry.altitude.data[curr_gradient_start_index] as i16];
+                            let mut distance_sampled: Vec<i16> = vec![0];
 
-                            let mut last_sample_index = curr_gradient_start_index;
-                            (curr_gradient_start_index..=curr_gradient_end_index).for_each(|curr_index| {
-                                if telemetry.distance.data[curr_index] - telemetry.distance.data[last_sample_index] > 25. {
+                            let mut last_sample_index = curr_gradient_start_index;                            
+
+                            (curr_gradient_start_index + 1..=curr_gradient_end_index).for_each(|curr_index| {
+                                if gradient_between(last_sample_index, curr_index).abs() >= 1. || telemetry.distance.data[curr_index] - telemetry.distance.data[last_sample_index] > 25. {
                                     last_sample_index = curr_index;
-                                    altitudes_sampled.push(telemetry.altitude.data[curr_index] as i16);
+
+                                    altitude_sampled.push(telemetry.altitude.data[curr_index] as i16);
+                                    distance_sampled.push((telemetry.distance.data[curr_index] - telemetry.distance.data[curr_gradient_start_index]) as i16);
                                 }                                
                             });
 
@@ -141,7 +146,11 @@ impl GradientFinder {
                                 avg_gradient: curr_avg_sum / curr_avg_dists,
                                 max_gradient: curr_max_gradient,
                                 elevation_gain: curr_alt_gain,
-                                altitudes: telemetry.altitude.data[curr_gradient_start_index as usize..curr_gradient_end_index as usize].iter().map(|a| *a as i16).collect()
+                                altitude: altitude_sampled,
+                                distance: distance_sampled,
+
+                                location_city: Some("".to_string()),
+                                location_country: Some("".to_string()),
                             });
 
                             println!(

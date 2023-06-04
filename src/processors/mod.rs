@@ -51,6 +51,7 @@ impl<'a> DataCreationPipeline<'a> {
         if false {
             // 0 //
             // Remap indexes of segments from the whole telemetry to the polyline's telemetry
+            // special procedure for re-writing activities
             self.run_indexes_remapper().await;
             return;
         }
@@ -104,7 +105,7 @@ impl<'a> DataCreationPipeline<'a> {
             processor.process(&telemetry);
             items_to_process += 1;
 
-            if items_to_process >= 5 {
+            if items_to_process >= 550 {
                 break;
             }
         }
@@ -143,7 +144,9 @@ impl<'a> DataCreationPipeline<'a> {
 
             // Extract data from master activity and put it into route
             route.master_activity_id = master_activity._id as DocumentId;
-            route.r#type = master_activity.r#type.to_string();
+            route.r#type = "Route".to_string();
+            route.r#type.push_str(&master_activity.r#type.to_string());
+
             route.distance = master_activity.distance;
             route.average_speed = master_activity.average_speed;
             route.total_elevation_gain = master_activity.total_elevation_gain;
@@ -235,7 +238,19 @@ impl<'a> DataCreationPipeline<'a> {
 
                     if gradients.len() > 0 {                        
                         let remapped_indexes = GeoUtils::get_index_mapping(&route.polyline, &telemetry.latlng.data);
-                        gradients.iter_mut().for_each(|gradient|{
+                        gradients.iter_mut().for_each(|gradient| {
+                            // Search through the segment efforts and find a matching start to fill the location data
+                            gradient.location_city = route.location_city.clone();
+                            gradient.location_country = Some(route.location_country.clone());
+
+                            for effort in &activity.segment_efforts {
+                                if gradient.start_index >= effort.start_index as usize {
+                                    gradient.location_city = effort.segment.city.clone();
+                                    gradient.location_country = effort.segment.country.clone();
+                                }
+                            }
+
+                            // Rewrite indexes with the remapped ones
                             gradient.start_index = remapped_indexes[gradient.start_index];
                             gradient.end_index = remapped_indexes[gradient.end_index];
                         });

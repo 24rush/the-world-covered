@@ -9,8 +9,11 @@ pub struct Gradient {
     pub avg_gradient: f32,
     pub max_gradient: f32,
     pub elevation_gain: f32,
+    pub location_city: Option<String>,
+    pub location_country: Option<String>,
     pub gradient: f32,
-    pub altitudes: Vec<i16>
+    pub altitude: Vec<i16>,
+    pub distance: Vec<i16>
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
