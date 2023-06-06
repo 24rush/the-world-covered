@@ -1,13 +1,12 @@
 use geo_types::Coord;
+use mongodb::bson::doc;
 use std::collections::HashMap;
 
 use crate::{
     data_types::{
         common::{DocumentId, Identifiable},
         gc::effort::Effort,
-        strava::{
-            athlete::AthleteId,
-        },
+        strava::athlete::AthleteId,
     },
     logln,
     util::{
@@ -47,6 +46,13 @@ impl<'a> DataCreationPipeline<'a> {
 
     pub async fn start(&'a mut self, athlete_id: AthleteId, options: &DataCreationPipelineOptions) {
         self.athlete_id = athlete_id;
+
+        if false {
+            // 0 //
+            // Fix string dates to DateTime
+            self.run_date_fixer_activities().await;
+            return;
+        }
 
         if false {
             // 0 //
@@ -236,8 +242,9 @@ impl<'a> DataCreationPipeline<'a> {
                 if activity.as_i64() == route.master_activity_id {
                     let mut gradients = gradient_finder::GradientFinder::find_gradients(&telemetry);
 
-                    if gradients.len() > 0 {                        
-                        let remapped_indexes = GeoUtils::get_index_mapping(&route.polyline, &telemetry.latlng.data);
+                    if gradients.len() > 0 {
+                        let remapped_indexes =
+                            GeoUtils::get_index_mapping(&route.polyline, &telemetry.latlng.data);
                         gradients.iter_mut().for_each(|gradient| {
                             // Search through the segment efforts and find a matching start to fill the location data
                             gradient.location_city = route.location_city.clone();
@@ -254,7 +261,7 @@ impl<'a> DataCreationPipeline<'a> {
                             gradient.start_index = remapped_indexes[gradient.start_index];
                             gradient.end_index = remapped_indexes[gradient.end_index];
                         });
-        
+
                         route.gradients = gradients;
                     }
                 }
@@ -308,7 +315,8 @@ impl<'a> DataCreationPipeline<'a> {
                 GeoUtils::get_index_mapping(&activity.map.polyline, &telemetry.latlng.data);
 
             for mut effort in activity.segment_efforts {
-                effort.start_index_poly = Some(remapped_indexes[effort.start_index as usize] as i32);
+                effort.start_index_poly =
+                    Some(remapped_indexes[effort.start_index as usize] as i32);
                 effort.end_index_poly = Some(remapped_indexes[effort.end_index as usize] as i32);
 
                 self.dependencies
@@ -318,5 +326,40 @@ impl<'a> DataCreationPipeline<'a> {
                     .unwrap();
             }
         }
+    }
+
+    async fn run_date_fixer_activities(&self) {
+        // Query for adding a date field from String field
+        let query = doc! {
+          "$addFields":
+          {
+            "start_date_local_date": {
+              "$dateFromString": {
+                "dateString": "$start_date_local",
+                "onError": "null"
+              }
+            }
+          }
+        };
+
+        let fixed_activities = self
+            .dependencies
+            .strava_db()
+            .query_activities(vec![query])
+            .await;
+
+        let mut count = 0;
+        for activity in fixed_activities {
+            println!("Fixing {:?} with {:?}", activity._id, activity.start_date_local_date);
+
+            self.dependencies
+                .strava_db()
+                .update_start_date_local(&activity)
+                .await;
+
+            count +=1;
+        }
+
+        println!("Fixed {}", count);
     }
 }

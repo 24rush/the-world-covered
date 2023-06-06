@@ -97,6 +97,16 @@ async fn query_routes(query: String) -> (Status, (ContentType, String)) {
         (ContentType::JSON, serde_json::to_string(&efforts).unwrap()),
     )
 }
+
+#[post("/query_statistics")]
+async fn query_statistics() -> (Status, (ContentType, String)) {
+    let app = App::anonym_athlete().await;
+    let efforts = app.query_statistics().await;
+    (
+        Status::Ok,
+        (ContentType::JSON, serde_json::to_string(&efforts).unwrap()),
+    )
+}
 /*
 #[tokio::main]
 async fn main() {
@@ -118,7 +128,9 @@ fn rocket() -> _ {
             query_routes,
             query_activities,
             query_efforts,
+            query_statistics,
             all_options
         ],
     )
 }
+

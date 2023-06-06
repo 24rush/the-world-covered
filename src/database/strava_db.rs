@@ -90,7 +90,7 @@ impl StravaDB {
         while cursor.advance().await.unwrap() {
             let doc = cursor.deserialize_current().unwrap();
 
-            let mut activity : Activity = bson::from_bson(bson::Bson::Document(doc)).unwrap();
+            let mut activity: Activity = bson::from_bson(bson::Bson::Document(doc)).unwrap();
 
             // Manually fill in location city and country from efforts if not present
             if let None = activity.location_city {
@@ -241,6 +241,18 @@ impl StravaDB {
     pub async fn update_activity(&self, activity: &Activity) -> Option<bool> {
         self.db_conn
             .upsert_one::<Activity>(&self.colls.typed_activities, activity)
+            .await
+    }
+
+    pub async fn update_start_date_local(&self, activity: &Activity) -> Option<bool> {
+        self.db_conn
+            .update_field(
+                "_id".to_owned(),
+                activity._id,
+                &self.colls.typed_activities,
+                "start_date_local_date",
+                &activity.start_date_local_date,
+            )
             .await
     }
 

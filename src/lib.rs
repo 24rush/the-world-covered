@@ -70,6 +70,10 @@ impl App {
         self.gc_db.query_routes(stages).await
     }
 
+    pub async fn query_statistics(&self) -> mongodb::bson::Document {
+        self.gc_db.query_statistics().await
+    }
+
     pub async fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
         self.strava_db.get_athlete_data(id).await
     }
@@ -117,9 +121,9 @@ impl App {
         .start(
             self.loggedin_athlete_id.unwrap(),
             &DataCreationPipelineOptions {
-                commonalities: true,
-                route_processor: true,
-                statistics: false
+                commonalities: false,
+                route_processor: false,
+                statistics: true
             },
         )
         .await;

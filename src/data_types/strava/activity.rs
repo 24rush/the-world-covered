@@ -1,3 +1,4 @@
+use mongodb::bson::DateTime;
 use serde_derive::{Deserialize, Serialize};
 
 use crate::data_types::common::DocumentId;
@@ -48,6 +49,7 @@ pub struct Activity {
     pub location_city: Option<String>,
     pub location_country: String,
     pub start_date_local: String,
+    pub start_date_local_date: Option<DateTime>
 }
 
 impl crate::data_types::common::Identifiable for Activity {
