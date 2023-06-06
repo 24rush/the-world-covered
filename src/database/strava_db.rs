@@ -79,8 +79,23 @@ impl StravaDB {
             .await
     }
 
+    pub async fn query_activity_docs(&self, stages: Vec<bson::Document>) -> Vec<mongodb::bson::Document> {
+        let mut activities: Vec<mongodb::bson::Document> = Vec::new();
+
+        let mut cursor = self
+            .db_conn
+            .aggregate(&self.colls.docs_activities, stages)
+            .await;
+
+        while cursor.advance().await.unwrap() {
+            activities.push(bson::to_document(&cursor.current()).unwrap());
+        }
+
+        activities
+    }
+
     pub async fn query_activities(&self, stages: Vec<bson::Document>) -> Vec<Activity> {
-        let mut act_ids: Vec<Activity> = Vec::new();
+        let mut activities: Vec<Activity> = Vec::new();
 
         let mut cursor = self
             .db_conn
@@ -109,10 +124,10 @@ impl StravaDB {
                 }
             }
 
-            act_ids.push(activity);
+            activities.push(activity);
         }
 
-        act_ids
+        activities
     }
 
     pub async fn get_activity(&self, id: i64) -> Option<Activity> {

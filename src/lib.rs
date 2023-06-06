@@ -57,9 +57,9 @@ impl App {
 
         None
     }
-
-    pub async fn query_activities(&self, stages: Vec<bson::Document>) -> Vec<Activity> {
-        self.strava_db.query_activities(stages).await
+    
+    pub async fn query_activities(&self, stages: Vec<bson::Document>) -> Vec<mongodb::bson::Document> {
+        self.strava_db.query_activity_docs(stages).await
     }
 
     pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {
