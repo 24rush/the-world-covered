@@ -12,9 +12,10 @@ pub struct YearlyStats {
     pub total_km_rides: u32,
     pub total_km_runs: u32,
 
-    pub hours_per_week_rides: u32,
-    pub hours_per_week_runs: u32,
+    pub mins_per_week_rides: u32,
+    pub mins_per_week_runs: u32,
 
+    pub calories: u32,
     pub total_kudos: u32,
     pub most_kudos_activity: DocumentId
     /*TODO distribution per days of week

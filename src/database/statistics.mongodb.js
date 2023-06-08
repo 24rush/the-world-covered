@@ -14,8 +14,11 @@ class YearStats {
     total_km_rides = 0;
     total_km_runs = 0;
 
-    hours_per_week_rides = 0;
-    hours_per_week_runs = 0;
+    mins_per_week_rides = 0;
+    mins_per_week_runs = 0;
+
+    calories_rides = 0;
+    calories_runs = 0;
 
     total_kudos = 0;
     most_kudos_activity = 0;
@@ -167,8 +170,11 @@ for (let year of years) {
     year_stats.total_km_rides = run_query(total_field_on_act_type_in_year("Ride", "distance", year)) / 1000;
     year_stats.total_km_runs = run_query(total_field_on_act_type_in_year("Run", "distance", year)) / 1000;
 
-    year_stats.hours_per_week_rides = run_query(total_field_on_act_type_in_year("Ride", "moving_time", year)) / 60 / (year == 2023 ? 20 : 52);
-    year_stats.hours_per_week_runs = run_query(total_field_on_act_type_in_year("Run", "moving_time", year)) / 60 / (year == 2023 ? 20 : 52);
+    year_stats.mins_per_week_rides = run_query(total_field_on_act_type_in_year("Ride", "moving_time", year)) / 60 / (year == 2023 ? 20 : 52);
+    year_stats.mins_per_week_runs = run_query(total_field_on_act_type_in_year("Run", "moving_time", year)) / 60 / (year == 2023 ? 20 : 52);
+
+    year_stats.calories_runs = run_query(total_field_on_act_type_in_year("Run", "calories", year));
+    year_stats.calories_rides += run_query(total_field_on_act_type_in_year("Ride", "calories", year));
 
     year_stats.total_kudos = run_query(total_field_on_act_type_in_year("Run", "kudos_count", year));
     year_stats.most_kudos_activity = run_query(sort_on_field_return_id("kudos_count", year));
@@ -188,8 +194,8 @@ for (let year of years) {
     print("Rides|" + " " + year_stats.total_km_rides);
     print("Runs |" + " " + year_stats.total_km_runs);
 
-    print("H Runs |" + " " + year_stats.hours_per_week_runs);
-    print("H Ride |" + " " + year_stats.hours_per_week_rides);
+    print("H Runs |" + " " + year_stats.mins_per_week_runs);
+    print("H Ride |" + " " + year_stats.mins_per_week_rides);
 
     print("Kudos |" + " " + year_stats.total_kudos);
     print("Act |" + " " + year_stats.most_kudos_activity);
