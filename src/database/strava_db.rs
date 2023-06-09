@@ -6,7 +6,7 @@ use mongodb::{
 use crate::data_types::{
     common::{DocumentId, Identifiable},
     strava::{
-        activity::{Activity, Effort},
+        activity::{Activity},
         athlete::{AthleteData, AthleteTokens},
         segment::Segment,
         telemetry::Telemetry,
@@ -79,7 +79,10 @@ impl StravaDB {
             .await
     }
 
-    pub async fn query_activity_docs(&self, stages: Vec<bson::Document>) -> Vec<mongodb::bson::Document> {
+    pub async fn query_activity_docs(
+        &self,
+        stages: Vec<bson::Document>,
+    ) -> Vec<mongodb::bson::Document> {
         let mut activities: Vec<mongodb::bson::Document> = Vec::new();
 
         let mut cursor = self
@@ -259,40 +262,25 @@ impl StravaDB {
             .await
     }
 
-    pub async fn update_start_date_local(&self, activity: &Activity) -> Option<bool> {
-        self.db_conn
-            .update_field(
-                "_id".to_owned(),
-                activity._id,
-                &self.colls.typed_activities,
-                "start_date_local_date",
-                &activity.start_date_local_date,
-            )
-            .await
-    }
-
-    pub async fn update_segment_effort_start_end_poly_indexes(
+    pub async fn update_activity_field<KT, V>(
         &self,
-        effort: &Effort,
-    ) -> Option<bool> {
+        key_path: String,
+        key_value: KT,        
+        field: &str,
+        value: &V,
+    ) -> Option<bool>
+    where
+        V: std::clone::Clone + Into<bson::Bson>,
+        KT: std::clone::Clone + Into<bson::Bson>,
+        bson::Bson: From<KT> + From<V>,
+    {
         self.db_conn
             .update_field(
-                "segment_efforts.id".to_owned(),
-                effort.id,
+                key_path,
+                &key_value,
                 &self.colls.typed_activities,
-                "segment_efforts.$.start_index_poly",
-                &effort.start_index_poly,
-            )
-            .await
-            .unwrap();
-
-        self.db_conn
-            .update_field(
-                "segment_efforts.id".to_owned(),
-                effort.id,
-                &self.colls.typed_activities,
-                "segment_efforts.$.end_index_poly",
-                &effort.end_index_poly,
+                field,
+                &value,
             )
             .await
     }

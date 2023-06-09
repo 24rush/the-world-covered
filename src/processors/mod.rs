@@ -8,18 +8,16 @@ use crate::{
         gc::effort::Effort,
         strava::athlete::AthleteId,
     },
-    logln,
     util::{
         facilities::{Facilities, Required},
         geo::GeoUtils,
     },
 };
 
-use self::{commonality::Commonality, statistics::Statistics};
+use self::{commonality::Commonality};
 
 pub mod commonality;
 pub mod gradient_finder;
-pub mod statistics;
 
 pub struct DataCreationPipelineOptions {
     pub commonalities: bool,
@@ -49,6 +47,9 @@ impl<'a> DataCreationPipeline<'a> {
 
         if false {
             // 0 //
+            // Add location city and country from first segment effort
+            self.run_location_fixer_activities().await;
+            
             // Fix string dates to DateTime
             self.run_date_fixer_activities().await;
             return;
@@ -78,17 +79,6 @@ impl<'a> DataCreationPipeline<'a> {
 
             // Using created routes, run RouteProcessor => segments collections, updates route collection
             self.run_route_processor().await;
-        }
-
-        if options.statistics {
-            // 3 //
-            // Clear previous statistics
-
-            // Create new statistics
-            let statistics = Statistics::new(self.dependencies);
-
-            let yearly_stats = statistics.collect_yearly_stats(self.athlete_id).await;
-            logln!("Yearly stats {:?}", yearly_stats);
         }
     }
 
@@ -321,7 +311,23 @@ impl<'a> DataCreationPipeline<'a> {
 
                 self.dependencies
                     .strava_db()
-                    .update_segment_effort_start_end_poly_indexes(&effort)
+                    .update_activity_field(
+                        "segment_efforts.id".to_owned(),
+                        effort.id,
+                        "segment_efforts.$.start_index_poly",
+                        &effort.start_index_poly,
+                    )
+                    .await
+                    .unwrap();
+
+                self.dependencies
+                    .strava_db()
+                    .update_activity_field(
+                        "segment_efforts.id".to_owned(),
+                        effort.id,
+                        "segment_efforts.$.end_index_poly",
+                        &effort.end_index_poly,
+                    )
                     .await
                     .unwrap();
             }
@@ -350,16 +356,77 @@ impl<'a> DataCreationPipeline<'a> {
 
         let mut count = 0;
         for activity in fixed_activities {
-            println!("Fixing {:?} with {:?}", activity._id, activity.start_date_local_date);
+            println!(
+                "Fixing {:?} with {:?}",
+                activity._id, activity.start_date_local_date
+            );
 
             self.dependencies
                 .strava_db()
-                .update_start_date_local(&activity)
+                .update_activity_field(
+                    "_id".to_owned(),
+                    activity._id,
+                    "start_date_local_date",
+                    &activity.start_date_local_date,
+                )
                 .await;
 
-            count +=1;
+            count += 1;
         }
 
         println!("Fixed {}", count);
+    }
+
+    async fn run_location_fixer_activities(&self) {
+        let athlete_acts = self
+            .dependencies
+            .strava_db()
+            .get_athlete_activity_ids(self.athlete_id)
+            .await;
+
+        for act_id in athlete_acts {
+            println!("Fixing {}", act_id);
+
+            let mut activity = self
+                .dependencies
+                .strava_db()
+                .get_activity(act_id)
+                .await
+                .unwrap();
+
+            activity.segment_efforts.iter().for_each(|effort| {
+                if let Some(effort_city) = &effort.segment.city {
+                    activity.location_city = Some(effort_city.to_string());
+                    return;
+                }
+            });
+
+            activity.segment_efforts.iter().for_each(|effort| {
+                if let Some(effort_country) = &effort.segment.country {
+                    activity.location_country = effort_country.to_string();
+                    return;
+                }
+            });
+
+            self.dependencies
+                .strava_db()
+                .update_activity_field(
+                    "_id".to_owned(),
+                    activity._id,
+                    "location_city",
+                    &activity.location_city,
+                )
+                .await;
+
+            self.dependencies
+                .strava_db()
+                .update_activity_field(
+                    "_id".to_owned(),
+                    activity._id,
+                    "location_country",
+                    &activity.location_country,
+                )
+                .await;
+        }
     }
 }
