@@ -1,17 +1,17 @@
 use std::vec;
 
-use ::mongodb::{Collection, Cursor};
 use ::mongodb::bson::Document;
 use ::mongodb::bson::{self, doc};
+use ::mongodb::{Collection, Cursor};
 
-use crate::data_types::gc::{route::Route, effort::Effort};
+use crate::data_types::gc::{effort::Effort, route::Route};
 
-use super::mongodb::{MongoConnection};
+use super::mongodb::MongoConnection;
 
 struct GCCollections {
     routes: Collection<Route>,
     efforts: Collection<Effort>,
-    statistics: Collection<Document>
+    statistics: Collection<Document>,
 }
 
 pub struct GCDB {
@@ -27,7 +27,11 @@ impl GCDB {
         let statistics: Collection<Document> = mongo_conn.collection("statistics");
         Self {
             db_conn: mongo_conn,
-            colls: GCCollections { routes, efforts, statistics },
+            colls: GCCollections {
+                routes,
+                efforts,
+                statistics,
+            },
         }
     }
 
@@ -49,7 +53,8 @@ impl GCDB {
 
     pub async fn get_routes(&self, ath_id: i64) -> Cursor<Route> {
         self.db_conn
-            .find::<Route>(&self.colls.routes, doc! {"athlete_id": ath_id}).await
+            .find::<Route>(&self.colls.routes, doc! {"athlete_id": ath_id})
+            .await
     }
 
     pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {
@@ -60,7 +65,10 @@ impl GCDB {
         self.db_conn.query(&self.colls.routes, stages).await
     }
 
-    pub async fn query_statistics(&self) -> Document {
-        self.db_conn.query(&self.colls.statistics, vec![]).await[0].to_owned()
+    pub async fn query_statistics(&self) -> Vec<Document> {
+        self.db_conn
+            .query(&self.colls.statistics, vec![doc! { "$match": { "_id": 0 } }])
+            .await
+            .to_owned()
     }
 }

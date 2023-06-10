@@ -70,7 +70,7 @@ impl App {
         self.gc_db.query_routes(stages).await
     }
 
-    pub async fn query_statistics(&self) -> mongodb::bson::Document {
+    pub async fn query_statistics(&self) -> Vec<mongodb::bson::Document> {
         self.gc_db.query_statistics().await
     }
 
@@ -121,8 +121,8 @@ impl App {
         .start(
             self.loggedin_athlete_id.unwrap(),
             &DataCreationPipelineOptions {
-                commonalities: false,
-                route_processor: false,
+                commonalities: true,
+                route_processor: true,
                 statistics: true
             },
         )
