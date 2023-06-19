@@ -101,4 +101,30 @@ impl GeoUtils {
 
         remapped_indexes
     }
+
+    pub fn reduced_accuracy(value: f32) -> i32 {
+        GeoUtils::reduce_accuracy(value, true)
+    }
+
+    pub fn less_reduced_accuracy(value: f32) -> i32 {
+        GeoUtils::reduce_accuracy(value, false)
+    }
+
+    pub fn reduce_accuracy(value: f32, max: bool) -> i32 {
+        const DIGIT_ACCURACY_MIN: f32 = 3.5;
+        const DIGIT_ACCURACY_MAX: f32 = 6.5;
+
+        let accuracy = if max {
+            DIGIT_ACCURACY_MIN
+        } else {
+            DIGIT_ACCURACY_MAX
+        };
+
+        let multiplier: f32 = 10_i32.pow(accuracy.floor() as u32) as f32;
+
+        let delta = accuracy - accuracy.floor();
+        let adj = if delta != 0.0 { 10.0 } else { 1.0 };
+
+        (((value * multiplier).floor() + delta) * adj).floor() as i32
+    }
 }
