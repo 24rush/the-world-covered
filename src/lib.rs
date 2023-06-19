@@ -1,5 +1,5 @@
 use data_types::{
-    gc::{route::Route, effort::Effort},
+    gc::{effort::Effort, route::Route},
     strava::{
         activity::Activity,
         athlete::{AthleteData, AthleteId},
@@ -8,10 +8,10 @@ use data_types::{
 use database::{gc_db::GCDB, strava_db::StravaDB};
 use maintenance::db_integrity_checks::Options;
 use mongodb::bson;
-use util::facilities::{DependenciesBuilder};
+use util::facilities::DependenciesBuilder;
 
 use crate::maintenance::db_integrity_checks::DBIntegrityChecker;
-use processors::{DataCreationPipeline, DataCreationPipelineOptions};
+use processors::{DataCreationPipeline, DataCreationPipelineOptions, SubOperationType, PipelineOperationType};
 use strava::api::StravaApi;
 
 use crate::{database::strava_db::ResourceType, util::logging};
@@ -57,8 +57,11 @@ impl App {
 
         None
     }
-    
-    pub async fn query_activities(&self, stages: Vec<bson::Document>) -> Vec<mongodb::bson::Document> {
+
+    pub async fn query_activities(
+        &self,
+        stages: Vec<bson::Document>,
+    ) -> Vec<mongodb::bson::Document> {
         self.strava_db.query_activity_docs(stages).await
     }
 
@@ -104,7 +107,8 @@ impl App {
     pub async fn store_athlete_activity(&mut self, act_id: i64) {
         logln!("Downloading activity: {}", act_id);
 
-        if let Some(mut new_activity) = self.strava_api.as_ref().unwrap().get_activity(act_id).await {
+        if let Some(mut new_activity) = self.strava_api.as_ref().unwrap().get_activity(act_id).await
+        {
             self.strava_db
                 .store_resource(ResourceType::Activity, act_id, &mut new_activity)
                 .await;
@@ -121,9 +125,10 @@ impl App {
         .start(
             self.loggedin_athlete_id.unwrap(),
             &DataCreationPipelineOptions {
-                commonalities: true,
-                route_processor: true,
-                statistics: true
+                commonalities: PipelineOperationType::Enabled(SubOperationType::Update),
+                //commonalities: PipelineOperationType::Disabled,
+                //route_processor: PipelineOperationType::Enabled(SubOperationType::None),
+                route_processor: PipelineOperationType::Disabled,
             },
         )
         .await;
@@ -136,10 +141,9 @@ impl App {
                 .with_strava_db(&self.strava_db)
                 .build(),
             &Options {
-                skip_activity_sync: false,
-                skip_activity_telemetry: false,
-                skip_segment_caching: false,
-                skip_segment_telemetry: true,
+                activity_sync: true,
+                segment_caching: false,
+                segment_telemetry: false,
             },
         )
         .start(self.loggedin_athlete_id.unwrap())

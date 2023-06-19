@@ -1,11 +1,16 @@
 use chrono::Utc;
+use mongodb::bson::doc;
 
 use crate::{
-    data_types::strava::athlete::AthleteId,
+    data_types::{
+        common::Identifiable,
+        strava::{activity::Activity, athlete::AthleteId},
+    },
     database::strava_db::ResourceType,
     logln, logvbln,
     util::{
         facilities::{Facilities, Required},
+        geo::GeoUtils,
         DateTimeUtils,
     },
 };
@@ -125,6 +130,26 @@ impl<'a> StravaDBSync<'a> {
                             .strava_db()
                             .store_resource(ResourceType::Activity, act_id, &mut new_activity)
                             .await;
+
+                        let mut db_activity = self
+                            .dependencies
+                            .strava_db()
+                            .get_activity(act_id)
+                            .await
+                            .unwrap();
+
+                        // Remap indexes of segments from the whole telemetry to the polyline's telemetry
+                        // special procedure for re-writing activities
+                        self.run_indexes_remapper(&mut db_activity).await;
+
+                        // Add location city and country from first segment effort
+                        self.run_location_fixer_activities(&mut db_activity).await;
+
+                        // Fix string dates to DateTime
+                        self.run_date_fixer_activities(&mut db_activity).await;
+
+                        // Download telemetry streams
+                        self.download_telemetry(&db_activity).await;
                     }
                 }
             } else {
@@ -139,5 +164,180 @@ impl<'a> StravaDBSync<'a> {
         }
 
         (last_activity_ts, has_more_items)
+    }
+
+    async fn download_telemetry(&mut self, activity: &Activity) {
+        let act_id = activity.as_i64();
+        logln!("Checking if telemetry exists for activity: {act_id}");
+
+        // Check telemetry for activity
+        if !self
+            .dependencies
+            .strava_db()
+            .exists_resource(ResourceType::Telemetry, act_id)
+            .await
+        {
+            let act = self
+                .dependencies
+                .strava_db()
+                .get_activity(act_id)
+                .await
+                .unwrap();
+
+            logln!("Downloading activity telemetry...");
+            if let Some(mut telemetry_json) = self
+                .dependencies
+                .strava_api()
+                .get_activity_telemetry(act_id)
+                .await
+            {
+                let mut m = telemetry_json.as_object().unwrap().clone();
+                m.insert(
+                    "athlete".to_string(),
+                    serde_json::json!({ "id": self.athlete_id }),
+                );
+                m.insert("type".to_string(), serde_json::Value::String(act.r#type));
+
+                telemetry_json = serde_json::Value::Object(m);
+                self.dependencies
+                    .strava_db()
+                    .store_resource(ResourceType::Telemetry, act_id, &mut telemetry_json)
+                    .await;
+            }
+        }
+    }
+
+    async fn run_indexes_remapper(&self, activity: &mut Activity) {
+        let mut needs_remapping = true;
+
+        // If field already exists then skip (for new activities does not apply just in case code is run on existing ones)
+        for effort in &activity.segment_efforts {
+            if let Some(_) = effort.start_index_poly {
+                needs_remapping = false;
+            }
+        }
+
+        if !needs_remapping {
+            return;
+        }
+
+        let act_id = activity.as_i64();
+
+        println!("Remapping {}", act_id);
+
+        let telemetry = self
+            .dependencies
+            .strava_db()
+            .get_telemetry_by_id(act_id)
+            .await
+            .unwrap();
+
+        let remapped_indexes: Vec<usize> =
+            GeoUtils::get_index_mapping(&activity.map.polyline, &telemetry.latlng.data);
+
+        for mut effort in activity.segment_efforts.iter_mut() {
+            effort.start_index_poly = Some(remapped_indexes[effort.start_index as usize] as i32);
+            effort.end_index_poly = Some(remapped_indexes[effort.end_index as usize] as i32);
+
+            self.dependencies
+                .strava_db()
+                .update_activity_field(
+                    "segment_efforts.id".to_owned(),
+                    effort.id,
+                    "segment_efforts.$.start_index_poly",
+                    &effort.start_index_poly,
+                )
+                .await
+                .unwrap();
+
+            self.dependencies
+                .strava_db()
+                .update_activity_field(
+                    "segment_efforts.id".to_owned(),
+                    effort.id,
+                    "segment_efforts.$.end_index_poly",
+                    &effort.end_index_poly,
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn run_date_fixer_activities(&self, activity: &mut Activity) {
+        // Query for adding a date field from String field
+        let query = doc! {
+          "$addFields":
+          {
+            "start_date_local_date": {
+              "$dateFromString": {
+                "dateString": "$start_date_local",
+                "onError": "null"
+              }
+            }
+          }
+        };
+
+        let fixed_activities = self
+            .dependencies
+            .strava_db()
+            .query_activities(vec![doc! {"$match": {"_id":activity._id}}, query])
+            .await;
+
+        for activity in fixed_activities {
+            println!(
+                "Fixing {:?} with {:?}",
+                activity._id, activity.start_date_local_date
+            );
+
+            self.dependencies
+                .strava_db()
+                .update_activity_field(
+                    "_id".to_owned(),
+                    activity._id,
+                    "start_date_local_date",
+                    &activity.start_date_local_date,
+                )
+                .await;
+        }
+    }
+
+    async fn run_location_fixer_activities(&self, activity: &mut Activity) {
+        let act_id = activity.as_i64();
+
+        println!("Fixing {}", act_id);
+
+        activity.segment_efforts.iter().for_each(|effort| {
+            if let Some(effort_city) = &effort.segment.city {
+                activity.location_city = Some(effort_city.to_string());
+                return;
+            }
+        });
+
+        activity.segment_efforts.iter().for_each(|effort| {
+            if let Some(effort_country) = &effort.segment.country {
+                activity.location_country = effort_country.to_string();
+                return;
+            }
+        });
+
+        self.dependencies
+            .strava_db()
+            .update_activity_field(
+                "_id".to_owned(),
+                activity._id,
+                "location_city",
+                &activity.location_city,
+            )
+            .await;
+
+        self.dependencies
+            .strava_db()
+            .update_activity_field(
+                "_id".to_owned(),
+                activity._id,
+                "location_country",
+                &activity.location_country,
+            )
+            .await;
     }
 }
