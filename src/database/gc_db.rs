@@ -4,6 +4,7 @@ use ::mongodb::bson::Document;
 use ::mongodb::bson::{self, doc};
 use ::mongodb::{Collection, Cursor};
 
+use crate::data_types::common::Identifiable;
 use crate::data_types::gc::{effort::Effort, route::Route};
 
 use super::mongodb::MongoConnection;
@@ -57,6 +58,32 @@ impl GCDB {
             .await
     }
 
+    pub async fn get_last_route_id(
+        &self,
+        ath_id: i64,
+    ) -> Option<crate::data_types::common::DocumentId> {
+        let mut result = self
+            .db_conn
+            .aggregate(
+                &self.colls.routes,
+                vec![
+                    doc! {"$match": { "athlete_id": ath_id}},
+                    doc! {"$sort": {"_id" : -1}},
+                    doc! {"$limit": 1},
+                ],
+            )
+            .await;
+
+        if result.advance().await.unwrap() {
+            let doc = result.deserialize_current().unwrap();
+            let route: Route = bson::from_bson(bson::Bson::Document(doc)).unwrap();
+
+            return Some(route.as_i64());
+        }
+
+        return None;
+    }
+
     pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {
         self.db_conn.query(&self.colls.efforts, stages).await
     }
@@ -67,7 +94,10 @@ impl GCDB {
 
     pub async fn query_statistics(&self) -> Vec<Document> {
         self.db_conn
-            .query(&self.colls.statistics, vec![doc! { "$match": { "_id": 0 } }])
+            .query(
+                &self.colls.statistics,
+                vec![doc! { "$match": { "_id": 0 } }],
+            )
             .await
             .to_owned()
     }

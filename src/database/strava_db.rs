@@ -1,12 +1,12 @@
 use mongodb::{
-    bson::{self, doc},
+    bson::{self, doc, Document},
     Collection,
 };
 
 use crate::data_types::{
     common::{DocumentId, Identifiable},
     strava::{
-        activity::{Activity},
+        activity::Activity,
         athlete::{AthleteData, AthleteTokens},
         segment::Segment,
         telemetry::Telemetry,
@@ -187,15 +187,65 @@ impl StravaDB {
         .cloned()
     }
 
+    pub async fn get_min_distance_activity_in_ids(
+        &self,
+        ids: &Vec<DocumentId>,
+    ) -> Option<Activity> {
+        self.query_activities(Vec::from([
+            doc! {"$match": {"_id": {"$in": ids}}},
+            doc! {"$sort": { "distance": 1 } },
+            doc! {"$limit": 1},
+        ]))
+        .await
+        .get(0)
+        .cloned()
+    }
+
+    pub async fn get_athlete_activity_ids_sorted_distance(&self, ath_id: i64) -> Vec<DocumentId> {
+        let mut act_ids: Vec<DocumentId> = Vec::new();
+
+        let mut cursor = self
+            .db_conn
+            .aggregate(
+                &self.colls.typed_activities,
+                vec![
+                    doc! {"$match": {"athlete.id": ath_id}},
+                    doc! {"$sort": { "distance": 1 } },
+                ],
+            )
+            .await;
+
+        while cursor.advance().await.unwrap() {
+            let res_float = cursor.current().get_f64("_id");
+
+            if let Ok(id) = res_float {
+                act_ids.push(id as i64);
+            } else {
+                let res_int = cursor.current().get_i32("_id");
+                if let Ok(id) = res_int {
+                    act_ids.push(id as i64);
+                }
+            }
+        }
+
+        act_ids
+    }
+
     pub async fn get_telemetry_by_id(&self, id: i64) -> Option<Telemetry> {
         self.db_conn
             .find_one(&self.colls.typed_telemetry, doc! {"_id": id})
             .await
     }
 
-    pub async fn get_athlete_telemetries(&self, ath_id: i64) -> mongodb::Cursor<Telemetry> {
+    pub async fn get_athlete_telemetries(&self, ath_id: i64) -> mongodb::Cursor<Document> {
         self.db_conn
-            .find::<Telemetry>(&self.colls.typed_telemetry, doc! {"athlete.id": ath_id})
+            .aggregate(
+                &self.colls.typed_telemetry,
+                vec![
+                    doc! {"$match": {"athlete.id": ath_id}},
+                    doc! { "$sort" : { "_id" : -1}},
+                ],
+            )
             .await
     }
 
@@ -265,7 +315,7 @@ impl StravaDB {
     pub async fn update_activity_field<KT, V>(
         &self,
         key_path: String,
-        key_value: KT,        
+        key_value: KT,
         field: &str,
         value: &V,
     ) -> Option<bool>
