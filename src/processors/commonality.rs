@@ -3,26 +3,40 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
-use crate::{data_types::{
-    common::{DocumentId, Identifiable},
-    gc::route::Route,
-    strava::telemetry::Telemetry,
-}, util::geo::GeoUtils};
+use crate::{
+    data_types::{
+        common::{DocumentId, Identifiable},
+        gc::route::Route,
+        strava::telemetry::Telemetry,
+    },
+    logvbln,
+    util::geo::GeoUtils,
+};
 
 // PUBLIC Types
 pub type MatchedRoutesResult = Vec<Route>;
 
 // INTERNAL Type
+type GroupId = DocumentId;
 type MatchIndex = i32;
 type LatLngReduced = i32;
-type ActivityTypeData = HashMap<LatLngReduced, HashMap<LatLngReduced, ActivityOccurence>>;
+type TelemetryTypeData = HashMap<LatLngReduced, HashMap<LatLngReduced, ActivityOccurence>>;
+type MatchDistribution = HashMap<MatchIndex, (DocumentId, usize)>;
 
+#[derive(Default)]
+struct GroupInfo {
+    // Actual activities that form the group
+    activities: Cell<HashSet<DocumentId>>,
+    // Number of times the match percentage occured in a group (so we know which master activity id to pick)
+    match_distribution: Cell<MatchDistribution>,
+}
+
+// Raw result of match percentage between two activities
 type Telem2TelemMatchResult = (MatchIndex, DocumentId, DocumentId);
+// Raw merged result for all activities processed
 type MatchedTelemetriesResult = Vec<HashSet<DocumentId>>;
 
-const DIGIT_ACCURACY_MIN: f32 = 3.5;
-const DIGIT_ACCURACY_MAX: f32 = 6.5;
-
+// Percentage of GPS points that need to match so that we can consider two routes similar
 const MATCH_THRESHOLD: MatchIndex = 85;
 
 #[derive(Default, Debug)]
@@ -31,29 +45,30 @@ struct ActivityOccurence {
 }
 
 #[derive(Default)]
-pub struct Commonality<'a> {
-    data: HashMap<DocumentId, &'a Telemetry>,
+pub struct Commonality {
+    // Number of GPS points per each activity loaded
     activity_datapoints_count: HashMap<DocumentId, usize>,
+
+    // Length in meter for each activity loaded
     activity_lengths: HashMap<DocumentId, usize>,
 
-    unique_points: HashMap<String, ActivityTypeData>,
+    // Map of all the points from the activities loaded
+    unique_points: HashMap<String, TelemetryTypeData>,
+
+    // Container storing number of matching points between two activies
     act_to_act_points: HashMap<DocumentId, HashMap<DocumentId, u32>>,
 
-    points_total: u32,
+    // Counter for creating route indexes
+    route_idx: DocumentId,
+
+    // Statistics purposes
+    points_total: usize,
     acts_total: u32,
     acts_unique: HashSet<DocumentId>,
-    route_idx: DocumentId,
 }
 
-impl<'a> Commonality<'a> {
+impl<'a> Commonality {
     const CC: &str = "Commonality";
-
-    // Functions using full set of data
-    pub fn set_data(&mut self, data: Vec<&'a Telemetry>) {
-        data.iter().for_each(|v| {
-            self.data.insert(v.as_i64(), v);
-        });
-    }
 
     // Used for update procedure so we know where to start creating new indexes from
     pub fn set_set_first_route_index(&mut self, start: DocumentId) {
@@ -79,7 +94,6 @@ impl<'a> Commonality<'a> {
         max_match_index >= MATCH_THRESHOLD
     }
 
-    // Functions using streamed data
     pub fn load_telemetry(&mut self, telemetry: &Telemetry) -> bool {
         if telemetry.latlng.data.len() == 0 {
             return false;
@@ -89,23 +103,23 @@ impl<'a> Commonality<'a> {
 
         self.acts_total += 1;
         self.acts_unique.insert(src_act_id);
+        self.points_total += telemetry.latlng.data.len();
 
+        // Store the number of GPS points for this activity
         self.activity_datapoints_count
             .entry(src_act_id)
             .or_insert(telemetry.latlng.data.len());
 
+        // Store the length of the activity
         self.activity_lengths
             .entry(src_act_id)
             .or_insert(telemetry.distance.data[telemetry.distance.data.len() - 1] as usize);
 
         for latlngs in &telemetry.latlng.data {
-            self.points_total += 1;
-            let lat = latlngs[0];
-            let long = latlngs[1];
+            let reduced_lat = GeoUtils::reduced_accuracy(latlngs[0]);
+            let reduced_long = GeoUtils::reduced_accuracy(latlngs[1]);
 
-            let reduced_lat = GeoUtils::reduced_accuracy(lat);
-            let reduced_long = GeoUtils::reduced_accuracy(long);
-
+            // Store the current GPS point in the map
             let set_acts_sharing_point = &mut self
                 .unique_points
                 .entry(telemetry.r#type.to_string())
@@ -119,8 +133,10 @@ impl<'a> Commonality<'a> {
                 .or_default()
                 .set_activities;
 
+            // Add the current activity id to the list of activities containing this point
             set_acts_sharing_point.insert(src_act_id);
 
+            // Increment the number of shared points between current activity and the rest of activities that contain this point
             for dest_act_id in set_acts_sharing_point.iter().collect::<Vec<&DocumentId>>() {
                 *self
                     .act_to_act_points
@@ -134,37 +150,20 @@ impl<'a> Commonality<'a> {
         return true;
     }
 
-    // Output vector of routes which contain the matched activities or standalone ones
-    pub fn matched_routes(&mut self) -> MatchedRoutesResult {
-        //println!("Processed {} {}", self.acts_total, self.acts_unique.len());
+    // Output is vector of routes which contain matched activities or standalone ones (that don't have any match)
+    pub fn matched_routes(&mut self) -> Vec<Route> {
+        logvbln!("Processed {} {}", self.acts_total, self.acts_unique.len());
 
-        self.acts_total = 0;
-
+        // Vector of (match percentage, act_id, act_id)
         let results = self.generate_match_results();
-        //println!("{:#?}", results);
+        //logvbln!("{:#?}", results);
 
-        let merged_routes = self.merge_results(&results);
-        //println!("{:#?}", merged_routes);
-
-        merged_routes
-            .iter()
-            .map(|result| {
-                self.route_idx += 1;
-
-                Route {
-                    _id: self.route_idx as f64,
-                    activities: result.iter().map(|act_id| *act_id).collect(),
-
-                    ..Default::default()
-                }
-            })
-            .collect()
+        // Vector of set of activities that are considered similar
+        self.merge_results(&results)
     }
 
     // PRIVATES
     fn generate_match_results(&self) -> Vec<Telem2TelemMatchResult> {
-        let mut results: Vec<Telem2TelemMatchResult> = Vec::new();
-
         let compute_match_percent = |src, count| -> i32 {
             let data_len = self.activity_datapoints_count[src] as f32;
             let clamp_count = if count as f32 > data_len {
@@ -185,10 +184,14 @@ impl<'a> Commonality<'a> {
             (100. * size_diff / (src_size.max(dest_size) as f32)) as i32
         };
 
+        let mut results: Vec<Telem2TelemMatchResult> = Vec::new();
+
         self.act_to_act_points.iter().for_each(|(src, dest_map)| {
             dest_map.iter().for_each(|(dest, count)| {
+                // Match percentage between activity src and dest
                 let src_2_dest_match = compute_match_percent(src, *count);
 
+                // If percentage is higher than threshold and their length are also proportional then create result
                 if src_2_dest_match >= MATCH_THRESHOLD
                     && distance_difference_percentage(src, dest) <= (100 - MATCH_THRESHOLD)
                 {
@@ -202,17 +205,30 @@ impl<'a> Commonality<'a> {
         results
     }
 
-    fn merge_results(&self, results: &Vec<Telem2TelemMatchResult>) -> MatchedTelemetriesResult {
-        let mut merge_result: MatchedTelemetriesResult = Vec::new(); // Vector of unique IDs
-
-        type GroupId = DocumentId;
-
+    // Gets the complete list of match percentages between pairs of activities and generates groups by merging all of them
+    fn merge_results(&mut self, results: &Vec<Telem2TelemMatchResult>) -> MatchedRoutesResult {
         let mut act_to_group: HashMap<DocumentId, GroupId> = HashMap::new(); // Existing activity to which group it is allocated
-        let mut groups: HashMap<GroupId, Cell<HashSet<DocumentId>>> = HashMap::new(); // Group composition
-
+        let mut groups: HashMap<GroupId, GroupInfo> = HashMap::new(); // Group composition
         let mut group_id_counter: GroupId = 1;
 
+        let shortest_act_id = |act_id_1: &DocumentId, act_id_2: &DocumentId| -> DocumentId {
+            if *act_id_1 == 0 {
+                return *act_id_2;
+            }
+
+            if *act_id_2 == 0 {
+                return *act_id_1;
+            }
+
+            if self.activity_lengths[act_id_1] < self.activity_lengths[act_id_2] {
+                *act_id_1
+            } else {
+                *act_id_2
+            }
+        };
+
         for two_telem_result in results {
+            let match_percentage = two_telem_result.0;
             let src_act_id = two_telem_result.1;
             let dest_act_id = two_telem_result.2;
 
@@ -222,79 +238,143 @@ impl<'a> Commonality<'a> {
             let src_has_group = src_group_id != 0;
             let dest_has_group = dest_group_id != 0;
 
-            if two_telem_result.0 < MATCH_THRESHOLD {
-                if !src_has_group {
+            {
+                // GROUP creation - when both activities are not present yet
+                let mut create_group = |activity_ids: &Vec<DocumentId>| {
+                    let is_new_group = !groups.contains_key(&group_id_counter);
+
                     let group_members = groups.entry(group_id_counter).or_default();
-                    group_members.get_mut().insert(src_act_id);
-                    act_to_group.insert(src_act_id, group_id_counter);
 
-                    group_id_counter += 1;
-                }
+                    activity_ids.iter().for_each(|act_id| {
+                        act_to_group.insert(*act_id, group_id_counter);
+                        group_members.activities.get_mut().insert(*act_id);
 
-                // Already created a group for source activity
-                if src_act_id == dest_act_id {
+                        let distribution = group_members
+                            .match_distribution
+                            .get_mut()
+                            .entry(match_percentage)
+                            .or_default();
+
+                        distribution.0 = shortest_act_id(&distribution.0, act_id);
+                        distribution.1 += 1;
+                    });
+
+                    if is_new_group {
+                        group_id_counter += 1;
+                    }
+                };
+
+                if match_percentage < MATCH_THRESHOLD {
+                    if !src_has_group {
+                        create_group(&vec![src_act_id]);
+                    }
+
+                    // Already created a group for source activity above
+                    if src_act_id != dest_act_id && !dest_has_group {
+                        create_group(&vec![dest_act_id]);
+                    }
+
                     continue;
                 }
 
-                if !dest_has_group {
-                    let group_members = groups.entry(group_id_counter).or_default();
-                    group_members.get_mut().insert(dest_act_id);
-                    act_to_group.insert(dest_act_id, group_id_counter);
+                // First occurence of these 2 activities
+                if !src_has_group && !dest_has_group {
+                    // None exist - create new group with just the 2 of them
+                    create_group(&vec![src_act_id, dest_act_id]);
 
-                    group_id_counter += 1;
+                    continue;
                 }
-
-                continue;
             }
 
-            if !src_has_group && !dest_has_group {
-                // None exist - create new group with just the 2 of them
-                act_to_group.insert(src_act_id, group_id_counter);
-                act_to_group.insert(dest_act_id, group_id_counter);
+            let mut insert_in_group = |group_id, activity_ids: &Vec<DocumentId>| {
+                if !groups.contains_key(&group_id) {
+                    panic!("Groups does not contain any group with id {group_id}");
+                }
 
-                let group_members = groups.entry(group_id_counter).or_default();
+                activity_ids.iter().for_each(|act_id| {
+                    act_to_group.insert(*act_id, group_id);
 
-                group_members.get_mut().insert(src_act_id);
-                group_members.get_mut().insert(dest_act_id);
+                    let group_info = groups.entry(group_id).or_default();
+                    group_info.activities.get_mut().insert(*act_id);
 
-                group_id_counter += 1;
-            } else if src_has_group && dest_has_group {
+                    let mut distribution = group_info
+                        .match_distribution
+                        .get_mut()
+                        .entry(match_percentage)
+                        .or_default();
+
+                    distribution.0 = shortest_act_id(&distribution.0, act_id);
+                    distribution.1 += 1;
+                });
+            };
+
+            if src_has_group && dest_has_group {
                 // Both are in groups
                 if src_group_id != dest_group_id {
-                    // Merge src and dest groups
-                    let dest_group = groups.get(&dest_group_id).unwrap().take();
-                    let src_group = groups.get_mut(&src_group_id).unwrap();
+                    // Move dest content to src group
+                    for dest_member_id in
+                        groups.get(&dest_group_id).unwrap().activities.take().iter()
+                    {
+                        groups
+                            .get_mut(&src_group_id)
+                            .unwrap()
+                            .activities
+                            .get_mut()
+                            .insert(*dest_member_id);
 
-                    for dest_member_id in dest_group.iter() {
-                        src_group.get_mut().insert(*dest_member_id);
                         act_to_group.remove(&dest_member_id);
                         act_to_group.insert(*dest_member_id, src_group_id);
                     }
 
+                    // Add the match distribution for the current pair
+                    let group_distr = groups
+                        .get_mut(&src_group_id)
+                        .unwrap()
+                        .match_distribution
+                        .get_mut()
+                        .entry(match_percentage)
+                        .or_default();
+
+                    group_distr.0 = shortest_act_id(&group_distr.0, &src_act_id);
+                    group_distr.1 += 1;
+
+                    // Copy the match distribution from the dest group to src group
+                    groups
+                        .get_mut(&dest_group_id)
+                        .unwrap()
+                        .match_distribution
+                        .take()
+                        .iter()
+                        .for_each(|(mp, (act_id, count))| {
+                            let group_info = groups
+                                .get_mut(&src_group_id)
+                                .unwrap()
+                                .match_distribution
+                                .get_mut()
+                                .entry(*mp)
+                                .or_default();
+
+                            group_info.0 = *act_id;
+                            group_info.1 += count;
+                        });
+
                     groups.remove(&dest_group_id);
                 }
             } else if src_has_group {
-                groups
-                    .entry(src_group_id)
-                    .or_default()
-                    .get_mut()
-                    .insert(dest_act_id);
-                act_to_group.insert(dest_act_id, src_group_id);
+                insert_in_group(src_group_id, &vec![dest_act_id]);
             } else if dest_has_group {
-                groups
-                    .entry(dest_group_id)
-                    .or_default()
-                    .get_mut()
-                    .insert(src_act_id);
-                act_to_group.insert(src_act_id, dest_group_id);
+                insert_in_group(dest_group_id, &vec![src_act_id]);
             }
         }
 
+        // DEBUG purposes
         let mut count = 0;
         let mut resulting_set: HashSet<DocumentId> = HashSet::new();
 
-        for (_, group) in groups {
-            let group = group.take();
+        let mut resulting_routes: Vec<Route> = Vec::new();
+
+        for (_, group_info) in groups {
+            let group = group_info.activities.take();
 
             if group.len() == 0 {
                 continue;
@@ -304,8 +384,36 @@ impl<'a> Commonality<'a> {
                 resulting_set.insert(*item);
             }
 
-            merge_result.push(HashSet::from_iter(group.iter().cloned()));
+            self.route_idx += 1;
             count += group.len();
+
+            let mut max_percent = 0;
+            let mut last_activity : DocumentId = 0;
+            let mut master_act_id: DocumentId = 0;
+
+            group_info.match_distribution.take().iter().for_each(
+                |(match_perc, (act_id, _))| {
+                    // Required for single activity groups which only contain themselves with 100%
+                    last_activity = *act_id;
+
+                    if *match_perc >= max_percent && *match_perc != 100 {
+                        max_percent = *match_perc;
+                        master_act_id = *act_id;
+                    }
+                },
+            );
+
+            if master_act_id == 0 {
+                master_act_id = last_activity;
+            }
+
+            resulting_routes.push(Route {
+                _id: self.route_idx as f64,
+                activities: group.into_iter().collect(),
+                master_activity_id: master_act_id,
+
+                ..Default::default()
+            });
         }
 
         println!("Allocated activities {}", count);
@@ -314,6 +422,6 @@ impl<'a> Commonality<'a> {
             self.acts_unique.difference(&resulting_set)
         );
 
-        merge_result
+        resulting_routes
     }
 }

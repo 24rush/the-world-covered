@@ -1,37 +1,36 @@
 use crate::{
-    data_types::{
-        strava::athlete::AthleteId,
-    },
+    data_types::strava::athlete::AthleteId,
     database::strava_db::ResourceType,
     logln,
+    processors::PipelineOperationType,
     util::facilities::{DependenciesBuilder, Facilities, Required},
 };
 
 use super::sync_from_strava::StravaDBSync;
 
-#[derive(Default, Copy, Clone)]
+#[derive(Default)]
 pub struct Options {
-    pub activity_sync: bool,
-    pub segment_caching: bool,
-    pub segment_telemetry: bool,
+    pub activity_sync: PipelineOperationType,
+    pub segment_caching: PipelineOperationType,
+    pub segment_telemetry: PipelineOperationType,
 }
 
 pub struct DBIntegrityChecker<'a> {
     athlete_id: AthleteId,
-    pub options: Options,
+    pub options: &'a Options,
     pub dependencies: &'a mut Facilities<'a>,
 }
 
 impl<'a> DBIntegrityChecker<'a> {
     const CC: &str = "DBIntegrityChecker";
 
-    pub fn new(dependencies: &'a mut Facilities<'a>, options: &Options) -> Self {
+    pub fn new(dependencies: &'a mut Facilities<'a>, options: &'a Options) -> Self {
         dependencies.check(vec![Required::StravaDB, Required::StravaApi]);
 
         Self {
             athlete_id: 0,
             dependencies,
-            options: options.clone(),
+            options
         }
     }
 
@@ -45,7 +44,7 @@ impl<'a> DBIntegrityChecker<'a> {
             .await
             .unwrap();
 
-        if self.options.activity_sync {
+        if self.options.activity_sync != PipelineOperationType::Disabled {
             StravaDBSync::new(
                 DependenciesBuilder::new()
                     .with_strava_db(self.dependencies.strava_db())
@@ -56,13 +55,15 @@ impl<'a> DBIntegrityChecker<'a> {
             .await;
         }
 
-        if self.options.segment_caching || self.options.segment_telemetry {
+        if self.options.segment_caching != PipelineOperationType::Disabled
+            || self.options.segment_telemetry != PipelineOperationType::Disabled
+        {
             let athlete_segments = &athlete_data.segments;
 
             for (seg_id_str, _) in athlete_segments {
                 let seg_id = seg_id_str.parse().unwrap();
 
-                if self.options.segment_caching {
+                if self.options.segment_caching != PipelineOperationType::Disabled {
                     if !self
                         .dependencies
                         .strava_db()
@@ -81,7 +82,7 @@ impl<'a> DBIntegrityChecker<'a> {
                     }
                 }
 
-                if self.options.segment_telemetry {
+                if self.options.segment_telemetry != PipelineOperationType::Disabled {
                     if !self
                         .dependencies
                         .strava_db()

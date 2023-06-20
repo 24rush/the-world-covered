@@ -138,6 +138,9 @@ impl<'a> StravaDBSync<'a> {
                             .await
                             .unwrap();
 
+                        // Download telemetry streams
+                        self.download_telemetry(&db_activity).await;
+
                         // Remap indexes of segments from the whole telemetry to the polyline's telemetry
                         // special procedure for re-writing activities
                         self.run_indexes_remapper(&mut db_activity).await;
@@ -147,9 +150,6 @@ impl<'a> StravaDBSync<'a> {
 
                         // Fix string dates to DateTime
                         self.run_date_fixer_activities(&mut db_activity).await;
-
-                        // Download telemetry streams
-                        self.download_telemetry(&db_activity).await;
                     }
                 }
             } else {
@@ -284,11 +284,6 @@ impl<'a> StravaDBSync<'a> {
             .await;
 
         for activity in fixed_activities {
-            println!(
-                "Fixing {:?} with {:?}",
-                activity._id, activity.start_date_local_date
-            );
-
             self.dependencies
                 .strava_db()
                 .update_activity_field(

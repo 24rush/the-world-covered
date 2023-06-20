@@ -18,16 +18,19 @@ use self::commonality::Commonality;
 pub mod commonality;
 pub mod gradient_finder;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Default)]
 pub enum SubOperationType {
+    #[default]
     None,
     Update,
     Rewrite,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Default)]
 pub enum PipelineOperationType {
     Enabled(SubOperationType),
+
+    #[default]
     Disabled,
 }
 
@@ -247,7 +250,7 @@ impl<'a> DataCreationPipeline<'a> {
             }
 
             if items_to_process >= 55 {
-                break;
+            //    break;
             }
         }
 
@@ -279,12 +282,12 @@ impl<'a> DataCreationPipeline<'a> {
             let master_activity = self
                 .dependencies
                 .strava_db()
-                .get_min_distance_activity_in_ids(&route.activities)
+                .get_activity(route.master_activity_id)
                 .await
                 .unwrap();
 
             // Extract data from master activity and put it into route
-            route.master_activity_id = master_activity._id as DocumentId;
+            //route.master_activity_id = master_activity._id as DocumentId;
             route.r#type = "Route".to_string();
             route.r#type.push_str(&master_activity.r#type.to_string());
 
@@ -374,7 +377,7 @@ impl<'a> DataCreationPipeline<'a> {
                 });
 
                 // Run GradientFinder
-                if false && activity.as_i64() == route.master_activity_id {
+                if activity.as_i64() == route.master_activity_id {
                     let mut gradients = gradient_finder::GradientFinder::find_gradients(&telemetry);
 
                     if gradients.len() > 0 {
