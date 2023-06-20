@@ -10,7 +10,7 @@ class YearStats {
 
     avg_speed_rides = 0;
     avg_speed_runs = 0;
-    
+
     total_km_rides = 0;
     total_km_runs = 0;
 
@@ -22,6 +22,11 @@ class YearStats {
 
     total_kudos = 0;
     most_kudos_activity = 0;
+
+    runs_over_20k = 0;
+    rides_over_100k = 0;
+    rides_over_160k = 0;
+
     ////
 
     //TODO distribution per days of week
@@ -112,6 +117,20 @@ function act_type_in_year(act_type, year) {
     }];
 }
 
+function act_type_in_year_distance_gt_than(act_type, year, value) {
+    var query = [{
+        $match: {
+            type: act_type,
+            start_date_local_date: date_in_year(year),
+            "distance": { $gte: value }
+        }
+    }];
+
+    query.push(count_stage());
+
+    return query;
+}
+
 function act_type_in_year_count(act_type, year) {
     var query = act_type_in_year(act_type, year);
 
@@ -162,6 +181,10 @@ for (let year of years) {
     yearly_stats.push(year_stats);
     year_stats.year = year;
 
+    year_stats.runs_over_20k = run_query(act_type_in_year_distance_gt_than("Run", year, 16000));
+    year_stats.rides_over_100k = run_query(act_type_in_year_distance_gt_than("Ride", year, 100000));
+    year_stats.rides_over_160k = run_query(act_type_in_year_distance_gt_than("Ride", year, 160000));
+
     year_stats.rides_with_friends = run_query(acts_with_friends_in_year(year));
     year_stats.runs = run_query(act_type_in_year_count("Run", year));
     year_stats.rides = run_query(act_type_in_year_count("Ride", year));
@@ -197,6 +220,10 @@ for (let year of years) {
     print("H Runs |" + " " + year_stats.mins_per_week_runs);
     print("H Ride |" + " " + year_stats.mins_per_week_rides);
 
+    print("Run 20 |" + " " + year_stats.runs_over_20k);
+    print("Ride 100 |" + " " + year_stats.rides_over_100k);
+    print("Ride 160 |" + " " + year_stats.rides_over_160k);
+
     print("Kudos |" + " " + year_stats.total_kudos);
     print("Act |" + " " + year_stats.most_kudos_activity);
 
@@ -205,4 +232,4 @@ for (let year of years) {
 }
 
 use('gc_db')
-db.statistics.updateOne({_id: 0}, {$set: {"stats":yearly_stats}}, {upsert: true})
+db.statistics.updateOne({ _id: 0 }, { $set: { "stats": yearly_stats } }, { upsert: true })
