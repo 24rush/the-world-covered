@@ -27,7 +27,8 @@ class YearStats {
     rides_over_100k = 0;
     rides_over_160k = 0;
 
-    ////
+    vo2max = 0;
+    best_12min_act_id = 0;
 
     //TODO distribution per days of week
     countries_visited = 0;
@@ -58,6 +59,7 @@ function run_query(query) {
 
     return (results && results.length) ? results[0].results : 0;
 }
+
 
 function count_stage() {
     return {
@@ -173,12 +175,61 @@ function sort_on_field_return_id(field, year) {
     return query;
 }
 
+function get_vo2max_in_year(year) {
+    let max_distance = 0;
+    let max_act = 0;
+    var results = db.activities.aggregate(act_type_in_year('Run', year)).toArray();
+
+    const TEST_DURATION = 12 * 60;
+
+    results.forEach(element => {
+        var telemetry = db.telemetry.find({ "_id": element._id }).toArray()[0];
+
+        let start_section = -1;
+        var curr_dist = 0;
+
+        for (var i = 0; i < telemetry.time.data.length; i++) {
+            if (start_section == -1 && parseInt(telemetry.time.data[i]) >= TEST_DURATION) {
+                start_section = 0;
+            }
+
+            if (start_section != -1) {
+                var time_gap = parseInt(telemetry.time.data[i]) - parseInt(telemetry.time.data[start_section]);
+
+                if (time_gap >= TEST_DURATION) {
+                    // Compute jump
+                    let jump_required = time_gap - TEST_DURATION;
+                    let time_at_start_section = parseInt(telemetry.time.data[start_section]);
+                    while (parseInt(telemetry.time.data[++start_section] - time_at_start_section) <= jump_required);
+
+                    var curr_dist = Math.max(curr_dist, parseInt(telemetry.distance.data[i]) - parseInt(telemetry.distance.data[start_section]));
+                    // Avoid abberations
+                    if (curr_dist != max_distance && curr_dist <= 3000) {
+                        max_distance = curr_dist;
+                        max_act = element._id;
+                        start_seg = parseInt(telemetry.distance.data[start_section]);
+                        end_seg = parseInt(telemetry.distance.data[i]);
+                    }
+                    start_section += 1;
+                }
+            }
+        }
+    });
+
+    return [max_distance > 0 ? (max_distance - 504.9) / 44.73 : 0, max_act];
+}
+
 var years = range(2014, 2023);
 var yearly_stats = [];
 
 for (let year of years) {
     var year_stats = new YearStats();
     yearly_stats.push(year_stats);
+
+    let vo2max_and_activity = get_vo2max_in_year(year);
+    year_stats.vo2max = vo2max_and_activity[0];
+    year_stats.best_12min_act_id = vo2max_and_activity[1];
+
     year_stats.year = year;
 
     year_stats.runs_over_20k = run_query(act_type_in_year_distance_gt_than("Run", year, 16000));
