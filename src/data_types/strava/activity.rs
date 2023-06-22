@@ -28,8 +28,10 @@ pub struct Effort {
     pub end_index: i32,
     pub start_date_local: String,
 
+    // Added later by post processor
     pub start_index_poly: Option<i32>,
-    pub end_index_poly: Option<i32>,    
+    pub end_index_poly: Option<i32>,
+    pub distance_from_start: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

@@ -4,7 +4,7 @@ use ::mongodb::bson::Document;
 use ::mongodb::bson::{self, doc};
 use ::mongodb::{Collection, Cursor};
 
-use crate::data_types::common::Identifiable;
+use crate::data_types::common::{DocumentId, Identifiable};
 use crate::data_types::gc::{effort::Effort, route::Route};
 
 use super::mongodb::MongoConnection;
@@ -82,6 +82,22 @@ impl GCDB {
         }
 
         return None;
+    }
+
+    pub async fn has_efforts_for_activity(&self, act_id: DocumentId) -> bool {
+        let found = self
+            .colls
+            .efforts
+            .find_one(Some(doc! {"activity_id": act_id}), None)
+            .await;
+        
+        if let Ok(search_op) = found {
+            if let Some(_) = search_op {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {

@@ -1,5 +1,5 @@
 use data_types::{
-    gc::{effort::Effort, route::Route},
+    gc::route::Route,
     strava::{
         activity::Activity,
         athlete::{AthleteData, AthleteId},
@@ -65,8 +65,8 @@ impl App {
         self.strava_db.query_activity_docs(stages).await
     }
 
-    pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {
-        self.gc_db.query_efforts(stages).await
+    pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<mongodb::bson::Document> {
+        self.strava_db.query_efforts(stages).await
     }
 
     pub async fn query_routes(&self, stages: Vec<bson::Document>) -> Vec<Route> {
@@ -125,10 +125,10 @@ impl App {
         .start(
             self.loggedin_athlete_id.unwrap(),
             &DataCreationPipelineOptions {
-                commonalities: PipelineOperationType::Enabled(SubOperationType::Update),
+                commonalities: PipelineOperationType::Enabled(SubOperationType::Rewrite),
                 //commonalities: PipelineOperationType::Disabled,
-                //route_processor: PipelineOperationType::Enabled(SubOperationType::None),
-                route_processor: PipelineOperationType::Disabled,
+                route_processor: PipelineOperationType::Enabled(SubOperationType::None),
+                //route_processor: PipelineOperationType::Disabled,
             },
         )
         .await;
@@ -141,9 +141,9 @@ impl App {
                 .with_strava_db(&self.strava_db)
                 .build(),
             &Options {
-                activity_sync: true,
-                segment_caching: false,
-                segment_telemetry: false,
+                activity_sync: PipelineOperationType::Enabled(SubOperationType::None),
+                segment_caching: PipelineOperationType::Disabled,
+                segment_telemetry: PipelineOperationType::Disabled,
             },
         )
         .start(self.loggedin_athlete_id.unwrap())

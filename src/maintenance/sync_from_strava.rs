@@ -208,19 +208,6 @@ impl<'a> StravaDBSync<'a> {
     }
 
     async fn run_indexes_remapper(&self, activity: &mut Activity) {
-        let mut needs_remapping = true;
-
-        // If field already exists then skip (for new activities does not apply just in case code is run on existing ones)
-        for effort in &activity.segment_efforts {
-            if let Some(_) = effort.start_index_poly {
-                needs_remapping = false;
-            }
-        }
-
-        if !needs_remapping {
-            return;
-        }
-
         let act_id = activity.as_i64();
 
         println!("Remapping {}", act_id);
@@ -232,31 +219,55 @@ impl<'a> StravaDBSync<'a> {
             .await
             .unwrap();
 
-        let remapped_indexes: Vec<usize> =
-            GeoUtils::get_index_mapping(&activity.map.polyline, &telemetry.latlng.data);
+        let mut remapped_indexes: Vec<usize> = vec![];
+        let mut needs_remapping = false;
+
+        // If field already exists then skip (for new activities does not apply just in case code is run on existing ones)
+        for effort in &activity.segment_efforts {
+            if let None = effort.start_index_poly {
+                remapped_indexes =
+                    GeoUtils::get_index_mapping(&activity.map.polyline, &telemetry.latlng.data);
+
+                needs_remapping = true;
+            }
+        }
 
         for mut effort in activity.segment_efforts.iter_mut() {
-            effort.start_index_poly = Some(remapped_indexes[effort.start_index as usize] as i32);
-            effort.end_index_poly = Some(remapped_indexes[effort.end_index as usize] as i32);
+            if needs_remapping {
+                effort.start_index_poly =
+                    Some(remapped_indexes[effort.start_index as usize] as i32);
+                effort.end_index_poly = Some(remapped_indexes[effort.end_index as usize] as i32);
+
+                self.dependencies
+                    .strava_db()
+                    .update_activity_field(
+                        "segment_efforts.id".to_owned(),
+                        effort.id,
+                        "segment_efforts.$.start_index_poly",
+                        &effort.start_index_poly,
+                    )
+                    .await
+                    .unwrap();
+
+                self.dependencies
+                    .strava_db()
+                    .update_activity_field(
+                        "segment_efforts.id".to_owned(),
+                        effort.id,
+                        "segment_efforts.$.end_index_poly",
+                        &effort.end_index_poly,
+                    )
+                    .await
+                    .unwrap();
+            }
 
             self.dependencies
                 .strava_db()
                 .update_activity_field(
                     "segment_efforts.id".to_owned(),
                     effort.id,
-                    "segment_efforts.$.start_index_poly",
-                    &effort.start_index_poly,
-                )
-                .await
-                .unwrap();
-
-            self.dependencies
-                .strava_db()
-                .update_activity_field(
-                    "segment_efforts.id".to_owned(),
-                    effort.id,
-                    "segment_efforts.$.end_index_poly",
-                    &effort.end_index_poly,
+                    "segment_efforts.$.distance_from_start",
+                    &telemetry.distance.data[effort.start_index as usize],
                 )
                 .await
                 .unwrap();

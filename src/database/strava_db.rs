@@ -107,30 +107,17 @@ impl StravaDB {
 
         while cursor.advance().await.unwrap() {
             let doc = cursor.deserialize_current().unwrap();
-
-            let mut activity: Activity = bson::from_bson(bson::Bson::Document(doc)).unwrap();
-
-            // Manually fill in location city and country from efforts if not present
-            if let None = activity.location_city {
-                if let Some(effort) = activity.segment_efforts.get(0) {
-                    if let Some(effort_city) = &effort.segment.city {
-                        activity.location_city = Some(effort_city.to_string());
-                    }
-                }
-            }
-
-            if activity.location_country == "" {
-                if let Some(effort) = activity.segment_efforts.get(0) {
-                    if let Some(effort_country) = &effort.segment.country {
-                        activity.location_country = effort_country.to_string();
-                    }
-                }
-            }
-
-            activities.push(activity);
+            activities.push(bson::from_bson(bson::Bson::Document(doc)).unwrap());
         }
 
         activities
+    }
+
+    pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<mongodb::bson::Document> {
+        self.db_conn
+            .query(&self.colls.docs_activities, stages)
+            .await
+            .to_owned()
     }
 
     pub async fn get_activity(&self, id: i64) -> Option<Activity> {

@@ -1,5 +1,5 @@
 use geo_types::Coord;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::{
     data_types::{
@@ -75,10 +75,7 @@ impl<'a> DataCreationPipeline<'a> {
 
         if options.route_processor == PipelineOperationType::Enabled(SubOperationType::None) {
             // 2 //
-            // Clear previous efforts
-            // self.dependencies.gc_db().clear_efforts().await;
-
-            // Using created routes, run RouteProcessor => segments collections, updates route collection
+            // Using created routes, run RouteProcessor => efforts collections, updates route collection
             self.run_route_processor().await;
         }
     }
@@ -152,7 +149,7 @@ impl<'a> DataCreationPipeline<'a> {
             // Take all unmatched activities and try to group them together
             // result should be groups which contain either merged activities or standalone ones
             let mut matched_missing_activities = processor.matched_routes();
-            
+
             // Go over the routes again and try to match the master activity of the route with the activities in each group from the missing ones
             let mut existing_routes = self.dependencies.gc_db().get_routes(self.athlete_id).await;
 
@@ -250,7 +247,7 @@ impl<'a> DataCreationPipeline<'a> {
             }
 
             if items_to_process >= 55 {
-            //    break;
+                //    break;
             }
         }
 
@@ -268,9 +265,6 @@ impl<'a> DataCreationPipeline<'a> {
             pub start_index: i32,
             pub end_index: i32,
         }
-
-        let mut segments_in_matched_activities: HashMap<DocumentId, EffortSegmentDetails> =
-            HashMap::new();
 
         let mut routes = self.dependencies.gc_db().get_routes(self.athlete_id).await;
 
@@ -312,22 +306,6 @@ impl<'a> DataCreationPipeline<'a> {
                 GeoUtils::distance(route.center_coord, Coord::from((26.096306, 44.439663))) as i32
                     / 100;
 
-            if let None = route.location_city {
-                if let Some(effort) = master_activity.segment_efforts.get(0) {
-                    if let Some(effort_city) = &effort.segment.city {
-                        route.location_city = Some(effort_city.to_string());
-                    }
-                }
-            }
-
-            if route.location_country == "" {
-                if let Some(effort) = master_activity.segment_efforts.get(0) {
-                    if let Some(effort_country) = &effort.segment.country {
-                        route.location_country = effort_country.to_string();
-                    }
-                }
-            }
-
             // Get all matched activities and fill in all the efforts
             let mut activities = self
                 .dependencies
@@ -337,47 +315,36 @@ impl<'a> DataCreationPipeline<'a> {
 
             while activities.advance().await.unwrap() {
                 let activity = activities.deserialize_current().unwrap();
+                let act_id: DocumentId = activity.as_i64();
+
                 let telemetry = self
                     .dependencies
                     .strava_db()
-                    .get_telemetry_by_id(activity.as_i64())
+                    .get_telemetry_by_id(act_id)
                     .await
                     .unwrap();
 
-                // Populate efforts collection
-                activity.segment_efforts.iter().for_each(|effort| {
-                    // Extract segment effort
-                    efforts_in_matched_activities.push(Effort {
-                        _id: effort.id as f64,
-                        athlete_id: effort.athlete.id,
-                        segment_id: effort.segment.id,
-                        activity_id: effort.activity.id,
-
-                        moving_time: effort.moving_time,
-                        start_date_local: effort.start_date_local.clone(),
-                        distance_from_start: telemetry.distance.data[effort.start_index as usize],
-                    });
-
-                    // Update the segment if we found only a shorter one
-                    let existing_segment = segments_in_matched_activities.get(&effort.segment.id);
-                    if let Some(segment) = existing_segment {
-                        if segment.distance < effort.segment.distance {
-                            return;
-                        }
-                    }
-
-                    segments_in_matched_activities
-                        .entry(effort.segment.id)
-                        .or_insert(EffortSegmentDetails {
+                // If database already contains efforts for this activity then it means we already downloaded them
+                if !self.dependencies.gc_db().has_efforts_for_activity(act_id).await {
+                    // Populate efforts collection
+                    activity.segment_efforts.iter().for_each(|effort| {
+                        // Extract segment effort
+                        efforts_in_matched_activities.push(Effort {
+                            _id: effort.id as f64,
+                            athlete_id: effort.athlete.id,
+                            segment_id: effort.segment.id,
                             activity_id: effort.activity.id,
-                            start_index: effort.start_index,
-                            end_index: effort.end_index,
-                            distance: 0.0,
+
+                            moving_time: effort.moving_time,
+                            start_date_local: effort.start_date_local.clone(),
+                            distance_from_start: telemetry.distance.data
+                                [effort.start_index as usize],
                         });
-                });
+                    });
+                }
 
                 // Run GradientFinder
-                if activity.as_i64() == route.master_activity_id {
+                if act_id == route.master_activity_id {
                     let mut gradients = gradient_finder::GradientFinder::find_gradients(&telemetry);
 
                     if gradients.len() > 0 {
