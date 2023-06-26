@@ -17,7 +17,7 @@ pub struct Facilities<'a> {
     gc_db: Option<&'a GCDB>,
 }
 
-impl Facilities<'_> {
+impl<'a> Facilities<'a> {
     pub fn strava_db(&self) -> &StravaDB {
         self.strava_db.unwrap()
     }

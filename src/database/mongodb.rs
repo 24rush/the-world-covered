@@ -1,38 +1,36 @@
-use crate::{data_types::common::Identifiable, database::mongodb::bson::Bson};
+use crate::{data_types::common::DocumentId, database::mongodb::bson::Bson};
 use mongodb::{
     bson::{self, doc, Document},
     options::{FindOptions, ReplaceOptions},
-    Client, Collection, Database,
+    Collection, Database,
 };
 use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
 
 #[derive(Debug, Clone)]
-pub struct MongoConnection {
+pub struct MongoDatabase {
     database: Database,
 }
 
-impl MongoConnection {
-    pub async fn new(db: &'static str) -> Self {
+impl MongoDatabase {
+    pub fn new(db: &Database) -> Self {
         Self {
-            database: Client::with_uri_str("mongodb://localhost:27017")
-                .await
-                .unwrap()
-                .database(db),
+            database: db.clone(),
         }
     }
 
-    pub fn collection<T>(&self, name: &str) -> Collection<T> {
+    pub fn typed_collection<T>(&self, name: &str) -> Collection<T> {
         self.database.collection(name)
     }
 
+    // Return T in which 'field' has largest value
     pub async fn max<T: DeserializeOwned + Unpin + Send + Sync + std::fmt::Debug>(
         &self,
         collection: &Collection<T>,
         query: Document,
         field: &str,
     ) -> Option<T> {
-        let mut cursor = collection
+        let find_res = collection
             .find(
                 query,
                 FindOptions::builder()
@@ -41,118 +39,32 @@ impl MongoConnection {
                     .build(),
             )
             .await
-            .unwrap();
+            .ok();
 
-        if let Ok(found) = cursor.advance().await {
-            if found {
-                return Some(cursor.deserialize_current().unwrap());
+        if let Some(mut find_data) = find_res {
+            if find_data.advance().await.unwrap() {
+                return Some(find_data.deserialize_current().unwrap());
             }
         }
 
         None
     }
 
-    pub async fn aggregate<T: DeserializeOwned + Unpin + Send + Sync>(
-        &self,
-        collection: &Collection<T>,
-        query: Vec<Document>,
-    ) -> mongodb::Cursor<Document> {
-        collection.aggregate(query, None).await.ok().unwrap()
-    }
-
-    pub async fn find<T: DeserializeOwned + Unpin + Send + Sync>(
-        &self,
-        collection: &Collection<T>,
-        query: Document,
-    ) -> mongodb::Cursor<T> {
-        collection.find(query, None).await.ok().unwrap()
-    }
-
-    pub async fn find_one<T: DeserializeOwned + Unpin + Send + Sync>(
-        &self,
-        collection: &Collection<T>,
-        query: Document,
-    ) -> Option<T> {
-        collection.find_one(query, None).await.ok().unwrap()
-    }
-
-    // Function to set a JSON (used when retrieving data from web APIs)
-    pub async fn upsert_one_raw<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
-        &self,
-        collection: &Collection<T>,
-        doc: &serde_json::Value,
-    ) -> Option<bool>
-    where
-        mongodb::bson::Document: Borrow<T>,
-    {
-        let res = collection
-            .replace_one(
-                doc! {"_id": doc.get("_id").unwrap().as_f64().unwrap() as i64},
-                bson::to_document(doc).unwrap().borrow(),
-                ReplaceOptions::builder().upsert(true).build(),
-            )
-            .await
-            .unwrap();
-
-        Some(res.modified_count > 0)
-    }
-
-    // Function to set a typed object
+    // Inserts doc_id if it doesn't exist, otherwise it replaces it
     pub async fn upsert_one<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
         &self,
         collection: &Collection<T>,
+        doc_id: DocumentId,
         doc: &T,
-    ) -> Option<bool>
-    where
-        T: Identifiable,
-    {
-        let res = collection
+    ) {
+        collection
             .replace_one(
-                doc! {"_id": doc.as_i64()},
+                doc! {"_id": doc_id},
                 doc,
                 ReplaceOptions::builder().upsert(true).build(),
             )
             .await
-            .unwrap();
-
-        Some(res.modified_count > 0)
-    }
-
-    pub async fn remove_all<T: DeserializeOwned + Unpin + Send + Sync + serde::Serialize>(
-        &self,
-        collection: &Collection<T>,
-    ) -> Option<bool>
-    where
-        T: Identifiable,
-    {
-        let res = collection.delete_many(doc! {}, None).await.unwrap();
-
-        Some(res.deleted_count > 0)
-    }
-
-    pub async fn update_field_of_doc_id<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(
-        &self,
-        key: KT,
-        collection: &Collection<T>,
-        field: &str,
-        value: &V,
-    ) -> Option<bool>
-    where
-        V: std::clone::Clone + Into<Bson>,
-        KT: std::clone::Clone + Into<Bson>,
-        Bson: From<KT> + From<V>,
-    {
-        let filter = doc! {"_id": key};
-        let update = doc! {"$set": {field:value}};
-
-        Some(
-            collection
-                .update_one(filter, update, None)
-                .await
-                .unwrap()
-                .modified_count
-                > 0,
-        )
+            .ok();
     }
 
     pub async fn update_field<KT, T: DeserializeOwned + Unpin + Send + Sync, V>(
@@ -162,28 +74,24 @@ impl MongoConnection {
         collection: &Collection<T>,
         field: &str,
         value: &V,
-    ) -> Option<bool>
-    where
+    ) where
         V: std::clone::Clone + Into<Bson>,
         KT: std::clone::Clone + Into<Bson>,
         Bson: From<KT> + From<V>,
     {
-        let filter = doc! {key_path: key_value};
-        let update = doc! {"$set": {field:value}};
-
-        Some(
-            collection
-                .update_one(filter, update, None)
-                .await
-                .unwrap()
-                .modified_count
-                > 0,
-        )
+        collection
+            .update_one(
+                doc! {key_path: key_value},
+                doc! {"$set": {field:value}},
+                None,
+            )
+            .await
+            .unwrap();
     }
 
     pub async fn exists<KT, T: DeserializeOwned + Unpin + Send + Sync>(
         &self,
-        collection: &Collection<mongodb::bson::Document>,
+        collection: &Collection<T>,
         id: KT,
     ) -> bool
     where
@@ -201,7 +109,7 @@ impl MongoConnection {
         return false;
     }
 
-    // To be used with limit
+    // To be used with limit as it returns Vec
     pub async fn query<T: DeserializeOwned + Unpin + Send + Sync + std::fmt::Debug>(
         &self,
         collection: &Collection<T>,
@@ -209,14 +117,10 @@ impl MongoConnection {
     ) -> Vec<T> {
         let mut results: Vec<T> = Vec::new();
 
-        let cursor = collection.aggregate(stages, None).await;
-
-        if let Ok(mut cursor_res) = cursor {
-            while cursor_res.advance().await.unwrap() {
-                let doc = cursor_res.deserialize_current().unwrap();
-                let effort: T = bson::from_bson(bson::Bson::Document(doc)).unwrap();
-
-                results.push(effort);
+        if let Ok(mut aggregate_res) = collection.aggregate(stages, None).await {
+            while aggregate_res.advance().await.unwrap() {
+                let doc = aggregate_res.deserialize_current().unwrap();                
+                results.push(bson::from_bson(bson::Bson::Document(doc)).unwrap());
             }
         }
 

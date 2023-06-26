@@ -6,7 +6,6 @@ use crate::{
         common::Identifiable,
         strava::{activity::Activity, athlete::AthleteId},
     },
-    database::strava_db::ResourceType,
     logln, logvbln,
     util::{
         facilities::{Facilities, Required},
@@ -42,6 +41,7 @@ impl<'a> StravaDBSync<'a> {
         let athlete_data = self
             .dependencies
             .strava_db()
+            .athletes
             .get_athlete_data(self.athlete_id)
             .await
             .unwrap();
@@ -55,6 +55,7 @@ impl<'a> StravaDBSync<'a> {
                 // when done move before to 0 and after to last activity ts
                 self.dependencies
                     .strava_db()
+                    .athletes
                     .save_after_before_timestamps(self.athlete_id, last_activity_ts, 0)
                     .await;
             }
@@ -70,6 +71,7 @@ impl<'a> StravaDBSync<'a> {
                     // when done move after to current
                     self.dependencies
                         .strava_db()
+                        .athletes
                         .save_after_before_timestamps(self.athlete_id, current_ts, current_ts)
                         .await;
                 }
@@ -109,13 +111,15 @@ impl<'a> StravaDBSync<'a> {
 
                     self.dependencies
                         .strava_db()
+                        .athletes
                         .save_after_before_timestamps(self.athlete_id, after_ts, last_activity_ts)
                         .await;
 
                     if self
                         .dependencies
                         .strava_db()
-                        .exists_resource(ResourceType::Activity, act_id)
+                        .activities
+                        .exists(act_id)
                         .await
                     {
                         logvbln!("Activity {} already in DB. Skipping download.", act_id);
@@ -128,13 +132,15 @@ impl<'a> StravaDBSync<'a> {
                     {
                         self.dependencies
                             .strava_db()
-                            .store_resource(ResourceType::Activity, act_id, &mut new_activity)
+                            .activities
+                            .store(act_id, &mut new_activity)
                             .await;
 
                         let mut db_activity = self
                             .dependencies
                             .strava_db()
-                            .get_activity(act_id)
+                            .activities
+                            .get(act_id)
                             .await
                             .unwrap();
 
@@ -168,19 +174,21 @@ impl<'a> StravaDBSync<'a> {
 
     async fn download_telemetry(&mut self, activity: &Activity) {
         let act_id = activity.as_i64();
-        logln!("Checking if telemetry exists for activity: {act_id}");
+        logln!("Checking if telemetry exists for activity: {}", act_id);
 
         // Check telemetry for activity
         if !self
             .dependencies
             .strava_db()
-            .exists_resource(ResourceType::Telemetry, act_id)
+            .telemetries
+            .exists(act_id)
             .await
         {
             let act = self
                 .dependencies
                 .strava_db()
-                .get_activity(act_id)
+                .activities
+                .get(act_id)
                 .await
                 .unwrap();
 
@@ -201,7 +209,8 @@ impl<'a> StravaDBSync<'a> {
                 telemetry_json = serde_json::Value::Object(m);
                 self.dependencies
                     .strava_db()
-                    .store_resource(ResourceType::Telemetry, act_id, &mut telemetry_json)
+                    .telemetries
+                    .store(act_id, &mut telemetry_json)
                     .await;
             }
         }
@@ -215,7 +224,8 @@ impl<'a> StravaDBSync<'a> {
         let telemetry = self
             .dependencies
             .strava_db()
-            .get_telemetry_by_id(act_id)
+            .telemetries
+            .get(act_id)
             .await
             .unwrap();
 
@@ -232,45 +242,37 @@ impl<'a> StravaDBSync<'a> {
             }
         }
 
-        for mut effort in activity.segment_efforts.iter_mut() {
+        for mut segment_effort in activity.segment_efforts.iter_mut() {
             if needs_remapping {
-                effort.start_index_poly =
-                    Some(remapped_indexes[effort.start_index as usize] as i32);
-                effort.end_index_poly = Some(remapped_indexes[effort.end_index as usize] as i32);
+                segment_effort.start_index_poly =
+                    Some(remapped_indexes[segment_effort.start_index as usize] as i32);
+                segment_effort.end_index_poly =
+                    Some(remapped_indexes[segment_effort.end_index as usize] as i32);
 
                 self.dependencies
                     .strava_db()
-                    .update_activity_field(
-                        "segment_efforts.id".to_owned(),
-                        effort.id,
-                        "segment_efforts.$.start_index_poly",
-                        &effort.start_index_poly,
+                    .activities
+                    .set_segment_start_index_poly(
+                        segment_effort.id,
+                        &segment_effort.start_index_poly,
                     )
-                    .await
-                    .unwrap();
+                    .await;
 
                 self.dependencies
                     .strava_db()
-                    .update_activity_field(
-                        "segment_efforts.id".to_owned(),
-                        effort.id,
-                        "segment_efforts.$.end_index_poly",
-                        &effort.end_index_poly,
-                    )
-                    .await
-                    .unwrap();
+                    .activities
+                    .set_segment_end_index_poly(segment_effort.id, &segment_effort.end_index_poly)
+                    .await;
             }
 
             self.dependencies
                 .strava_db()
-                .update_activity_field(
-                    "segment_efforts.id".to_owned(),
-                    effort.id,
-                    "segment_efforts.$.distance_from_start",
-                    &telemetry.distance.data[effort.start_index as usize],
+                .activities
+                .set_segment_distance_from_start(
+                    segment_effort.id,
+                    telemetry.distance.data[segment_effort.start_index as usize],
                 )
-                .await
-                .unwrap();
+                .await;
         }
     }
 
@@ -291,18 +293,15 @@ impl<'a> StravaDBSync<'a> {
         let fixed_activities = self
             .dependencies
             .strava_db()
+            .activities
             .query_activities(vec![doc! {"$match": {"_id":activity._id}}, query])
             .await;
 
         for activity in fixed_activities {
             self.dependencies
                 .strava_db()
-                .update_activity_field(
-                    "_id".to_owned(),
-                    activity._id,
-                    "start_date_local_date",
-                    &activity.start_date_local_date,
-                )
+                .activities
+                .set_start_date_local_date(activity.as_i64(), &activity.start_date_local_date)
                 .await;
         }
     }
@@ -328,22 +327,14 @@ impl<'a> StravaDBSync<'a> {
 
         self.dependencies
             .strava_db()
-            .update_activity_field(
-                "_id".to_owned(),
-                activity._id,
-                "location_city",
-                &activity.location_city,
-            )
+            .activities
+            .set_location_city(activity.as_i64(), &activity.location_city)
             .await;
 
         self.dependencies
             .strava_db()
-            .update_activity_field(
-                "_id".to_owned(),
-                activity._id,
-                "location_country",
-                &activity.location_country,
-            )
+            .activities
+            .set_location_country(activity.as_i64(), &activity.location_country)
             .await;
     }
 }

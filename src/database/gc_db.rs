@@ -2,60 +2,40 @@ use std::vec;
 
 use ::mongodb::bson::Document;
 use ::mongodb::bson::{self, doc};
-use ::mongodb::{Collection, Cursor};
+use ::mongodb::Collection;
+use mongodb::Client;
 
-use crate::data_types::common::{DocumentId, Identifiable};
-use crate::data_types::gc::{effort::Effort, route::Route};
+use crate::data_types::common::Identifiable;
+use crate::data_types::gc::route::Route;
 
-use super::mongodb::MongoConnection;
+use super::mongodb::MongoDatabase;
 
-struct GCCollections {
-    routes: Collection<Route>,
-    efforts: Collection<Effort>,
-    statistics: Collection<Document>,
+pub struct Routes {
+    db_conn: MongoDatabase,
 }
 
-pub struct GCDB {
-    pub db_conn: MongoConnection,
-    colls: GCCollections,
+pub struct Statistics {
+    db_conn: MongoDatabase,
 }
 
-impl GCDB {
-    pub async fn new() -> Self {
-        let mongo_conn = MongoConnection::new("gc_db").await;
-        let routes: Collection<Route> = mongo_conn.collection("routes");
-        let efforts: Collection<Effort> = mongo_conn.collection("efforts");
-        let statistics: Collection<Document> = mongo_conn.collection("statistics");
+impl Routes {
+    const COLL_NAME: &str = "routes";
+
+    pub fn new(db_conn: &MongoDatabase) -> Self {
         Self {
-            db_conn: mongo_conn,
-            colls: GCCollections {
-                routes,
-                efforts,
-                statistics,
-            },
+            db_conn: db_conn.clone(),
         }
     }
 
-    pub async fn clear_routes(&self) {
-        self.db_conn.remove_all(&self.colls.routes).await;
+    fn typed_collection(&self) -> Collection<Route> {
+        self.db_conn.typed_collection(Routes::COLL_NAME)
     }
 
-    pub async fn clear_efforts(&self) {
-        self.db_conn.remove_all(&self.colls.efforts).await;
-    }
-
-    pub async fn update_effort(&self, effort: &Effort) {
-        self.db_conn.upsert_one(&self.colls.efforts, effort).await;
-    }
-
-    pub async fn update_route(&self, route: &Route) {
-        self.db_conn.upsert_one(&self.colls.routes, route).await;
-    }
-
-    pub async fn get_routes(&self, ath_id: i64) -> Cursor<Route> {
-        self.db_conn
-            .find::<Route>(&self.colls.routes, doc! {"athlete_id": ath_id})
+    pub async fn get_athlete_routes(&self, ath_id: i64) -> mongodb::Cursor<Route> {
+        self.typed_collection()
+            .find(doc! {"athlete_id": ath_id}, None)
             .await
+            .unwrap()
     }
 
     pub async fn get_last_route_id(
@@ -63,16 +43,18 @@ impl GCDB {
         ath_id: i64,
     ) -> Option<crate::data_types::common::DocumentId> {
         let mut result = self
-            .db_conn
+            .typed_collection()
             .aggregate(
-                &self.colls.routes,
                 vec![
                     doc! {"$match": { "athlete_id": ath_id}},
                     doc! {"$sort": {"_id" : -1}},
                     doc! {"$limit": 1},
                 ],
+                None,
             )
-            .await;
+            .await
+            .ok()
+            .unwrap();
 
         if result.advance().await.unwrap() {
             let doc = result.deserialize_current().unwrap();
@@ -81,40 +63,70 @@ impl GCDB {
             return Some(route.as_i64());
         }
 
-        return None;
+        None
     }
 
-    pub async fn has_efforts_for_activity(&self, act_id: DocumentId) -> bool {
-        let found = self
-            .colls
-            .efforts
-            .find_one(Some(doc! {"activity_id": act_id}), None)
+    pub async fn clear_routes(&self) {
+        self.typed_collection()
+            .delete_many(doc! {}, None)
+            .await
+            .ok();
+    }
+
+    pub async fn update(&self, route: &Route) {
+        self.db_conn
+            .upsert_one(&self.typed_collection(), route.as_i64(), route)
             .await;
-        
-        if let Ok(search_op) = found {
-            if let Some(_) = search_op {
-                return true;
-            }
+    }
+
+    pub async fn query(&self, stages: Vec<bson::Document>) -> Vec<Route> {
+        self.db_conn
+            .query(&self.typed_collection(), stages)
+            .await
+    }
+}
+
+impl Statistics {
+    const COLL_NAME: &str = "statistics";
+
+    pub fn new(db_conn: &MongoDatabase) -> Self {
+        Self {
+            db_conn: db_conn.clone(),
         }
-
-        return false;
     }
 
-    pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<Effort> {
-        self.db_conn.query(&self.colls.efforts, stages).await
+    fn raw_collection(&self) -> Collection<mongodb::bson::Document> {
+        self.db_conn.typed_collection(Statistics::COLL_NAME)
     }
 
-    pub async fn query_routes(&self, stages: Vec<bson::Document>) -> Vec<Route> {
-        self.db_conn.query(&self.colls.routes, stages).await
-    }
-
-    pub async fn query_statistics(&self) -> Vec<Document> {
+    pub async fn query(&self) -> Vec<Document> {
         self.db_conn
             .query(
-                &self.colls.statistics,
+                &self.raw_collection(),
                 vec![doc! { "$match": { "_id": 0 } }],
             )
             .await
             .to_owned()
+    }
+}
+
+pub struct GCDB {
+    pub routes: Routes,
+    pub statistics: Statistics,
+}
+
+impl GCDB {
+    pub async fn new(db_url: &str) -> GCDB {
+        let db = Client::with_uri_str(db_url)
+            .await
+            .unwrap()
+            .database("gc_db");
+
+        let db_coll = MongoDatabase::new(&db);
+
+        Self {
+            routes: Routes::new(&db_coll),
+            statistics: Statistics::new(&db_coll),
+        }
     }
 }

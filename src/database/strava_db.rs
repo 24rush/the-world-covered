@@ -1,163 +1,102 @@
-use mongodb::{
-    bson::{self, doc, Document},
-    Collection,
-};
+use std::borrow::Borrow;
 
 use crate::data_types::{
     common::{DocumentId, Identifiable},
     strava::{
         activity::Activity,
         athlete::{AthleteData, AthleteTokens},
-        segment::Segment,
         telemetry::Telemetry,
     },
 };
+use mongodb::{
+    bson::{self, doc, DateTime},
+    Client, Collection,
+};
 
-use super::mongodb::MongoConnection;
+use super::mongodb::MongoDatabase;
 
-struct StravaCollections {
-    typed_athletes: Collection<AthleteData>,
-
-    docs_activities: Collection<mongodb::bson::Document>,
-    typed_activities: Collection<Activity>,
-
-    docs_telemetry: Collection<mongodb::bson::Document>,
-    typed_telemetry: Collection<Telemetry>,
-
-    segments: Collection<mongodb::bson::Document>,
-    typed_segments: Collection<Segment>,
+pub struct ActivitiesCollection {
+    db_conn: MongoDatabase,
 }
 
-pub enum ResourceType {
-    Activity,
-    Segment,
-    Telemetry,
+pub struct TelemetriesCollection {
+    db_conn: MongoDatabase,
 }
 
-pub struct StravaDB {
-    pub db_conn: MongoConnection,
-    colls: StravaCollections,
+pub struct AthletesCollection {
+    db_conn: MongoDatabase,
 }
 
-impl StravaDB {
-    pub async fn new() -> Self {
-        let mongo_conn = MongoConnection::new("strava_db").await;
+impl ActivitiesCollection {
+    const COLL_NAME: &str = "activities";
 
-        let typed_athletes: Collection<AthleteData> = mongo_conn.collection("athletes");
-
-        let docs_activities: Collection<mongodb::bson::Document> =
-            mongo_conn.collection("activities");
-        let typed_activities: Collection<Activity> = mongo_conn.collection("activities");
-
-        let docs_telemetry: Collection<mongodb::bson::Document> =
-            mongo_conn.collection("telemetry");
-        let typed_telemetry: Collection<Telemetry> = mongo_conn.collection("telemetry");
-
-        let segments: Collection<mongodb::bson::Document> = mongo_conn.collection("segments");
-        let typed_segments: Collection<Segment> = mongo_conn.collection("segments");
-
+    pub fn new(db_conn: &MongoDatabase) -> Self {
         Self {
-            db_conn: mongo_conn,
-            colls: StravaCollections {
-                typed_athletes,
-
-                docs_activities,
-                typed_activities,
-
-                docs_telemetry,
-                typed_telemetry,
-
-                segments,
-                typed_segments,
-            },
+            db_conn: db_conn.clone(),
         }
     }
 
-    pub async fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
-        self.db_conn
-            .find_one(&self.colls.typed_athletes, doc! {"_id": id})
+    fn typed_collection(&self) -> Collection<Activity> {
+        self.db_conn.typed_collection(ActivitiesCollection::COLL_NAME)
+    }
+
+    fn raw_collection(&self) -> Collection<mongodb::bson::Document> {
+        self.db_conn.typed_collection(ActivitiesCollection::COLL_NAME)
+    }
+
+    // GETTERS
+    pub async fn get(&self, id: i64) -> Option<Activity> {
+        self.typed_collection()
+            .find_one(doc! {"_id": id}, None)
             .await
+            .ok()
+            .unwrap()
     }
 
-    pub async fn query_activity_docs(
-        &self,
-        stages: Vec<bson::Document>,
-    ) -> Vec<mongodb::bson::Document> {
-        let mut activities: Vec<mongodb::bson::Document> = Vec::new();
-
-        let mut cursor = self
-            .db_conn
-            .aggregate(&self.colls.docs_activities, stages)
-            .await;
-
-        while cursor.advance().await.unwrap() {
-            activities.push(bson::to_document(&cursor.current()).unwrap());
-        }
-
-        activities
-    }
-
-    pub async fn query_activities(&self, stages: Vec<bson::Document>) -> Vec<Activity> {
-        let mut activities: Vec<Activity> = Vec::new();
-
-        let mut cursor = self
-            .db_conn
-            .aggregate(&self.colls.typed_activities, stages)
-            .await;
-
-        while cursor.advance().await.unwrap() {
-            let doc = cursor.deserialize_current().unwrap();
-            activities.push(bson::from_bson(bson::Bson::Document(doc)).unwrap());
-        }
-
-        activities
-    }
-
-    pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<mongodb::bson::Document> {
-        self.db_conn
-            .query(&self.colls.docs_activities, stages)
+    pub async fn get_athlete_activities(&self, ath_id: i64) -> Option<mongodb::Cursor<Activity>> {
+        self.typed_collection()
+            .find(doc! {"athlete.id": ath_id}, None)
             .await
-            .to_owned()
-    }
-
-    pub async fn get_activity(&self, id: i64) -> Option<Activity> {
-        self.db_conn
-            .find_one(&self.colls.typed_activities, doc! {"_id": id})
-            .await
-    }
-
-    pub async fn get_athlete_activity_ids(&self, ath_id: i64) -> Vec<DocumentId> {
-        let mut cursor = self
-            .db_conn
-            .find(&self.colls.typed_activities, doc! {"athlete.id": ath_id})
-            .await;
-
-        let mut act_ids: Vec<DocumentId> = Vec::new();
-
-        while cursor.advance().await.unwrap() {
-            act_ids.push(cursor.deserialize_current().unwrap().as_i64());
-        }
-
-        act_ids
-    }
-
-    pub async fn get_athlete_activities(&self, ath_id: i64) -> mongodb::Cursor<Activity> {
-        self.db_conn
-            .find::<Activity>(&self.colls.typed_activities, doc! {"athlete.id": ath_id})
-            .await
+            .ok()
     }
 
     pub async fn get_athlete_activities_with_ids(
         &self,
         ath_id: i64,
         ids: &Vec<DocumentId>,
-    ) -> mongodb::Cursor<Activity> {
-        self.db_conn
-            .find::<Activity>(
-                &self.colls.typed_activities,
-                doc! {"athlete.id": ath_id, "_id": {"$in": ids}},
+    ) -> Option<mongodb::Cursor<Activity>> {
+        self.typed_collection()
+            .find(doc! {"athlete.id": ath_id, "_id": {"$in": ids}}, None)
+            .await
+            .ok()
+    }
+
+    pub async fn get_athlete_activity_ids(&self, ath_id: i64) -> Vec<DocumentId> {
+        let mut act_ids: Vec<DocumentId> = Vec::new();
+
+        if let Some(mut cursor) = self.get_athlete_activities(ath_id).await {
+            while cursor.advance().await.unwrap() {
+                act_ids.push(cursor.deserialize_current().unwrap().as_i64());
+            }
+        }
+
+        act_ids
+    }
+
+    pub async fn get_athlete_activities_sorted_distance_asc(
+        &self,
+        ath_id: i64,
+    ) -> Option<mongodb::Cursor<mongodb::bson::Document>> {
+        self.typed_collection()
+            .aggregate(
+                vec![
+                    doc! {"$match": {"athlete.id": ath_id}},
+                    doc! {"$sort": { "distance": 1 } },
+                ],
+                None,
             )
             .await
+            .ok()
     }
 
     pub async fn get_max_distance_activity_in_ids(
@@ -174,138 +113,100 @@ impl StravaDB {
         .cloned()
     }
 
-    pub async fn get_min_distance_activity_in_ids(
-        &self,
-        ids: &Vec<DocumentId>,
-    ) -> Option<Activity> {
-        self.query_activities(Vec::from([
-            doc! {"$match": {"_id": {"$in": ids}}},
-            doc! {"$sort": { "distance": 1 } },
-            doc! {"$limit": 1},
-        ]))
-        .await
-        .get(0)
-        .cloned()
+    // SETTERS
+    pub async fn set_location_city(&self, act_id: i64, city: &Option<String>) {
+        self.update("_id".to_owned(), act_id, "location_city", &city)
+            .await;
     }
 
-    pub async fn get_athlete_activity_ids_sorted_distance(&self, ath_id: i64) -> Vec<DocumentId> {
-        let mut act_ids: Vec<DocumentId> = Vec::new();
+    pub async fn set_location_country(&self, act_id: i64, country: &String) {
+        self.update("_id".to_owned(), act_id, "location_country", &country)
+            .await;
+    }
 
-        let mut cursor = self
-            .db_conn
-            .aggregate(
-                &self.colls.typed_activities,
-                vec![
-                    doc! {"$match": {"athlete.id": ath_id}},
-                    doc! {"$sort": { "distance": 1 } },
-                ],
+    pub async fn set_segment_start_index_poly(&self, seg_id: i64, start_index_poly: &Option<i32>) {
+        if let Some(start_index) = start_index_poly {
+            self.update(
+                "segment_efforts.id".to_owned(),
+                seg_id,
+                "segment_efforts.$.start_index_poly",
+                &start_index,
             )
             .await;
-
-        while cursor.advance().await.unwrap() {
-            let res_float = cursor.current().get_f64("_id");
-
-            if let Ok(id) = res_float {
-                act_ids.push(id as i64);
-            } else {
-                let res_int = cursor.current().get_i32("_id");
-                if let Ok(id) = res_int {
-                    act_ids.push(id as i64);
-                }
-            }
-        }
-
-        act_ids
-    }
-
-    pub async fn get_telemetry_by_id(&self, id: i64) -> Option<Telemetry> {
-        self.db_conn
-            .find_one(&self.colls.typed_telemetry, doc! {"_id": id})
-            .await
-    }
-
-    pub async fn get_athlete_telemetries(&self, ath_id: i64) -> mongodb::Cursor<Document> {
-        self.db_conn
-            .aggregate(
-                &self.colls.typed_telemetry,
-                vec![
-                    doc! {"$match": {"athlete.id": ath_id}},
-                    doc! { "$sort" : { "_id" : -1}},
-                ],
-            )
-            .await
-    }
-
-    pub async fn get_telemetry_by_type(
-        &self,
-        ath_id: i64,
-        r#type: &str,
-    ) -> mongodb::Cursor<Telemetry> {
-        self.db_conn
-            .find::<Telemetry>(
-                &self.colls.typed_telemetry,
-                doc! {"athlete.id": ath_id, "type": r#type},
-            )
-            .await
-    }
-
-    pub async fn get_segment(&self, seg_id: i64) -> Option<Segment> {
-        self.db_conn
-            .find_one::<Segment>(&self.colls.typed_segments, doc! {"_id": seg_id})
-            .await
-    }
-
-    pub async fn exists_resource(&self, res_type: ResourceType, res_id: i64) -> bool {
-        match res_type {
-            ResourceType::Activity => {
-                self.db_conn
-                    .exists(&self.colls.docs_activities, res_id)
-                    .await
-            }
-            ResourceType::Segment => self.db_conn.exists(&self.colls.segments, res_id).await,
-            ResourceType::Telemetry => {
-                self.db_conn
-                    .exists(&self.colls.docs_telemetry, res_id)
-                    .await
-            }
         }
     }
 
-    pub async fn save_after_before_timestamps(
+    pub async fn set_segment_end_index_poly(&self, seg_id: i64, start_index_poly: &Option<i32>) {
+        if let Some(start_index) = start_index_poly {
+            self.update(
+                "segment_efforts.id".to_owned(),
+                seg_id,
+                "segment_efforts.$.start_end_poly",
+                &start_index,
+            )
+            .await;
+        }
+    }
+
+    pub async fn set_segment_distance_from_start(&self, seg_id: i64, distance_from_start: f32) {
+        self.update(
+            "segment_efforts.id".to_owned(),
+            seg_id,
+            "segment_efforts.$.distance_from_start",
+            &distance_from_start,
+        )
+        .await;
+    }
+
+    pub async fn set_start_date_local_date(
         &self,
-        ath_id: i64,
-        after_ts: i64,
-        before_ts: i64,
-    ) -> Option<bool> {
-        self.db_conn
-            .update_field_of_doc_id(ath_id, &self.colls.typed_athletes, &"before_ts", &before_ts)
-            .await
-            .unwrap();
+        seg_id: i64,
+        start_index_poly: &Option<DateTime>,
+    ) {
+        if let Some(start_index) = start_index_poly {
+            self.update(
+                "_id".to_owned(),
+                seg_id,
+                "start_date_local_date",
+                &start_index,
+            )
+            .await;
+        }
+    }
 
+    pub async fn query_activities(&self, stages: Vec<bson::Document>) -> Vec<Activity> {
         self.db_conn
-            .update_field_of_doc_id(ath_id, &self.colls.typed_athletes, &"after_ts", &after_ts)
+            .query(&self.typed_collection(), stages)
+            .await
+            .to_owned()
+    }
+
+    pub async fn query_activities_docs(&self, stages: Vec<bson::Document>) -> Vec<bson::Document> {
+        self.db_conn
+            .query(&self.raw_collection(), stages)
+            .await
+            .to_owned()
+    }
+
+    pub async fn exists(&self, act_id: i64) -> bool {
+        self.db_conn
+            .exists(&self.raw_collection(), act_id)
             .await
     }
 
-    pub async fn set_athlete_data(&self, athlete_data: &AthleteData) -> Option<bool> {
+    pub async fn store(&self, act_id: i64, json: &mut serde_json::Value) {
+        json["_id"] = serde_json::Value::Number(act_id.into());
+
         self.db_conn
-            .upsert_one::<AthleteData>(&self.colls.typed_athletes, athlete_data)
-            .await
+            .upsert_one(
+                &self.raw_collection(),
+                json["_id"].as_i64().unwrap(),
+                bson::to_document(&json).unwrap().borrow(),
+            )
+            .await;
     }
 
-    pub async fn update_activity(&self, activity: &Activity) -> Option<bool> {
-        self.db_conn
-            .upsert_one::<Activity>(&self.colls.typed_activities, activity)
-            .await
-    }
-
-    pub async fn update_activity_field<KT, V>(
-        &self,
-        key_path: String,
-        key_value: KT,
-        field: &str,
-        value: &V,
-    ) -> Option<bool>
+    pub async fn update<KT, V>(&self, key_path: String, key_value: KT, field: &str, value: &V)
     where
         V: std::clone::Clone + Into<bson::Bson>,
         KT: std::clone::Clone + Into<bson::Bson>,
@@ -315,60 +216,148 @@ impl StravaDB {
             .update_field(
                 key_path,
                 &key_value,
-                &self.colls.typed_activities,
+                &self.typed_collection(),
                 field,
                 &value,
             )
+            .await;
+    }
+}
+
+impl TelemetriesCollection {
+    const COLL_NAME: &str = "telemetry";
+
+    pub fn new(db_conn: &MongoDatabase) -> Self {
+        Self {
+            db_conn: db_conn.clone(),
+        }
+    }
+
+    fn typed_collection(&self) -> Collection<Telemetry> {
+        self.db_conn.typed_collection(TelemetriesCollection::COLL_NAME)
+    }
+
+    fn raw_collection(&self) -> Collection<mongodb::bson::Document> {
+        self.db_conn.typed_collection(TelemetriesCollection::COLL_NAME)
+    }
+
+    pub async fn get(&self, id: i64) -> Option<Telemetry> {
+        self.typed_collection()
+            .find_one(doc! {"_id": id}, None)
+            .await
+            .ok()
+            .unwrap()
+    }
+
+    pub async fn exists(&self, act_id: i64) -> bool {
+        self.db_conn
+            .exists(&self.raw_collection(), act_id)
             .await
     }
 
-    pub async fn get_athlete_tokens(&self, id: i64) -> Option<AthleteTokens> {
-        if let Some(athlete_data) = self.get_athlete_data(id).await {
-            return Some(athlete_data.tokens);
-        }
+    pub async fn store(&self, act_id: i64, json: &mut serde_json::Value) {
+        json["_id"] = serde_json::Value::Number(act_id.into());
 
-        None
+        self.db_conn
+            .upsert_one(
+                &self.raw_collection(),
+                json["_id"].as_i64().unwrap(),
+                bson::to_document(&json).unwrap().borrow(),
+            )
+            .await;
+    }
+}
+
+impl AthletesCollection {
+    pub fn new(db_conn: &MongoDatabase) -> Self {
+        Self {
+            db_conn: db_conn.clone(),
+        }
     }
 
-    pub async fn set_athlete_tokens(
-        &self,
-        id: i64,
-        athlete_tokens: &AthleteTokens,
-    ) -> Option<bool> {
+    fn typed_docs_collection(&self) -> Collection<AthleteData> {
+        self.db_conn.typed_collection("athletes")
+    }
+
+    pub async fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
+        self.typed_docs_collection()
+            .find_one(doc! {"_id": id}, None)
+            .await
+            .ok()
+            .unwrap()
+    }
+
+    pub async fn set_athlete_data(&self, athlete_data: &AthleteData) {
         self.db_conn
-            .update_field_of_doc_id(
+            .upsert_one::<AthleteData>(
+                &self.typed_docs_collection(),
+                athlete_data.as_i64(),
+                athlete_data,
+            )
+            .await;
+    }
+
+    pub async fn set_athlete_tokens(&self, id: i64, athlete_tokens: &AthleteTokens) {
+        self.db_conn
+            .update_field(
+                "_id".to_owned(),
                 id,
-                &self.colls.typed_athletes,
+                &self.typed_docs_collection(),
                 "tokens",
                 &bson::to_document(athlete_tokens).unwrap(),
             )
-            .await
+            .await;
     }
 
-    pub async fn store_resource(
-        &self,
-        res_type: ResourceType,
-        res_id: i64,
-        json: &mut serde_json::Value,
-    ) -> Option<bool> {
-        json["_id"] = serde_json::Value::Number(res_id.into());
+    pub async fn save_after_before_timestamps(&self, ath_id: i64, after_ts: i64, before_ts: i64) {
+        self.db_conn
+            .update_field(
+                "_id".to_owned(),
+                ath_id,
+                &self.typed_docs_collection(),
+                &"before_ts",
+                &before_ts,
+            )
+            .await;
 
-        match res_type {
-            ResourceType::Activity => {
-                self.db_conn
-                    .upsert_one_raw(&self.colls.docs_activities, &json)
-                    .await
-            }
-            ResourceType::Segment => {
-                self.db_conn
-                    .upsert_one_raw(&self.colls.segments, &json)
-                    .await
-            }
-            ResourceType::Telemetry => {
-                self.db_conn
-                    .upsert_one_raw(&self.colls.docs_telemetry, &json)
-                    .await
-            }
+        self.db_conn
+            .update_field(
+                "_id".to_owned(),
+                ath_id,
+                &self.typed_docs_collection(),
+                &"after_ts",
+                &after_ts,
+            )
+            .await;
+    }
+}
+
+pub struct StravaDB {
+    db_conn: MongoDatabase,
+
+    pub activities: ActivitiesCollection,
+    pub telemetries: TelemetriesCollection,
+    pub athletes: AthletesCollection,
+}
+
+impl StravaDB {
+    pub async fn new(db_url: &str) -> Self {
+        let db = Client::with_uri_str(db_url)
+            .await
+            .unwrap()
+            .database("strava_db");
+
+        let db_coll = MongoDatabase::new(&db);
+
+        Self {
+            db_conn: db_coll.clone(),
+            activities: ActivitiesCollection::new(&db_coll),
+            telemetries: TelemetriesCollection::new(&db_coll),
+            athletes: AthletesCollection::new(&db_coll),
         }
+    }
+
+    pub fn get_athletes_collection(&self) -> AthletesCollection {
+        AthletesCollection::new(&self.db_conn)
     }
 }

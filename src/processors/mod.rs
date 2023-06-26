@@ -2,11 +2,7 @@ use geo_types::Coord;
 use std::collections::HashSet;
 
 use crate::{
-    data_types::{
-        common::{DocumentId, Identifiable},
-        gc::effort::Effort,
-        strava::athlete::AthleteId,
-    },
+    data_types::{common::DocumentId, strava::athlete::AthleteId},
     util::{
         facilities::{Facilities, Required},
         geo::GeoUtils,
@@ -64,7 +60,7 @@ impl<'a> DataCreationPipeline<'a> {
             // Run route matching module => update routes collections
             if options.commonalities == PipelineOperationType::Enabled(SubOperationType::Rewrite) {
                 // Clear previous results and store latest ones
-                self.dependencies.gc_db().clear_routes().await;
+                self.dependencies.gc_db().routes.clear_routes().await;
                 self.run_rewrite_commonalities().await;
             }
 
@@ -88,7 +84,12 @@ impl<'a> DataCreationPipeline<'a> {
         let mut already_grouped_act_ids: HashSet<DocumentId> = HashSet::new();
 
         {
-            let mut existing_routes = self.dependencies.gc_db().get_routes(self.athlete_id).await;
+            let mut existing_routes = self
+                .dependencies
+                .gc_db()
+                .routes
+                .get_athlete_routes(self.athlete_id)
+                .await;
 
             // Read routes and determine the activity IDs already matched
             while existing_routes.advance().await.unwrap() {
@@ -106,6 +107,7 @@ impl<'a> DataCreationPipeline<'a> {
             let last_route_idx = self
                 .dependencies
                 .gc_db()
+                .routes
                 .get_last_route_id(self.athlete_id)
                 .await
                 .unwrap();
@@ -117,6 +119,7 @@ impl<'a> DataCreationPipeline<'a> {
             let all_activity_ids = self
                 .dependencies
                 .strava_db()
+                .activities
                 .get_athlete_activity_ids(self.athlete_id)
                 .await;
             let all_activities: HashSet<DocumentId> = HashSet::from_iter(all_activity_ids);
@@ -133,7 +136,8 @@ impl<'a> DataCreationPipeline<'a> {
                 let telemetry_missing = self
                     .dependencies
                     .strava_db()
-                    .get_telemetry_by_id(*missing_activity_id)
+                    .telemetries
+                    .get(*missing_activity_id)
                     .await
                     .unwrap();
 
@@ -151,7 +155,12 @@ impl<'a> DataCreationPipeline<'a> {
             let mut matched_missing_activities = processor.matched_routes();
 
             // Go over the routes again and try to match the master activity of the route with the activities in each group from the missing ones
-            let mut existing_routes = self.dependencies.gc_db().get_routes(self.athlete_id).await;
+            let mut existing_routes = self
+                .dependencies
+                .gc_db()
+                .routes
+                .get_athlete_routes(self.athlete_id)
+                .await;
 
             while existing_routes.advance().await.unwrap() {
                 let mut route = existing_routes.deserialize_current().unwrap();
@@ -159,7 +168,8 @@ impl<'a> DataCreationPipeline<'a> {
                 let telemetry_master = self
                     .dependencies
                     .strava_db()
-                    .get_telemetry_by_id(route.master_activity_id)
+                    .telemetries
+                    .get(route.master_activity_id)
                     .await
                     .unwrap();
 
@@ -187,7 +197,7 @@ impl<'a> DataCreationPipeline<'a> {
                             .extend(missing_group.activities.iter().cloned());
 
                         matched_missing_activities.remove(index_grouped_route as usize);
-                        self.dependencies.gc_db().update_route(&route).await;
+                        self.dependencies.gc_db().routes.update(&route).await;
 
                         break;
                     }
@@ -211,7 +221,8 @@ impl<'a> DataCreationPipeline<'a> {
                     unmatched_group.athlete_id = self.athlete_id;
                     self.dependencies
                         .gc_db()
-                        .update_route(&unmatched_group)
+                        .routes
+                        .update(&unmatched_group)
                         .await;
                 }
             }
@@ -223,20 +234,31 @@ impl<'a> DataCreationPipeline<'a> {
     async fn run_rewrite_commonalities(&self) {
         let mut processor: Commonality = Default::default();
 
-        let sorted_activity_ids = self
+        let mut sorted_activities_cursor = self
             .dependencies
             .strava_db()
-            .get_athlete_activity_ids_sorted_distance(self.athlete_id)
-            .await;
+            .activities
+            .get_athlete_activities_sorted_distance_asc(self.athlete_id)
+            .await
+            .unwrap();
 
         let mut items_to_process = 0;
 
-        for act_id in sorted_activity_ids {
-            let res_telemetry = self
-                .dependencies
-                .strava_db()
-                .get_telemetry_by_id(act_id)
-                .await;
+        while sorted_activities_cursor.advance().await.unwrap() {
+            let mut act_id: DocumentId = 0;
+
+            let res_float = sorted_activities_cursor.current().get_f64("_id");
+
+            if let Ok(id) = res_float {
+                act_id = id as i64;
+            } else {
+                let res_int = sorted_activities_cursor.current().get_i32("_id");
+                if let Ok(id) = res_int {
+                    act_id = id as i64;
+                }
+            }
+
+            let res_telemetry = self.dependencies.strava_db().telemetries.get(act_id).await;
 
             if let None = res_telemetry {
                 continue;
@@ -254,7 +276,11 @@ impl<'a> DataCreationPipeline<'a> {
         for mut matched_route in processor.matched_routes() {
             // Mark the owner of the route so we can retrieve them later in the following processors
             matched_route.athlete_id = self.athlete_id;
-            self.dependencies.gc_db().update_route(&matched_route).await;
+            self.dependencies
+                .gc_db()
+                .routes
+                .update(&matched_route)
+                .await;
         }
     }
 
@@ -266,17 +292,22 @@ impl<'a> DataCreationPipeline<'a> {
             pub end_index: i32,
         }
 
-        let mut routes = self.dependencies.gc_db().get_routes(self.athlete_id).await;
+        let mut routes = self
+            .dependencies
+            .gc_db()
+            .routes
+            .get_athlete_routes(self.athlete_id)
+            .await;
 
         while routes.advance().await.unwrap() {
-            let mut efforts_in_matched_activities: Vec<Effort> = Vec::new();
             let mut route = routes.deserialize_current().unwrap();
 
             // Find the master activity of this routes: the longest one from the matched ones
             let master_activity = self
                 .dependencies
                 .strava_db()
-                .get_activity(route.master_activity_id)
+                .activities
+                .get(route.master_activity_id)
                 .await
                 .unwrap();
 
@@ -307,76 +338,60 @@ impl<'a> DataCreationPipeline<'a> {
                     / 100;
 
             // Get all matched activities and fill in all the efforts
-            let mut activities = self
+            if let Some(mut activities) = self
                 .dependencies
                 .strava_db()
+                .activities
                 .get_athlete_activities_with_ids(self.athlete_id, &route.activities)
-                .await;
+                .await
+            {
+                while activities.advance().await.unwrap() {
+                    let activity = activities.deserialize_current().unwrap();
+                    let act_id: DocumentId =
+                        crate::data_types::common::Identifiable::as_i64(&activity);
 
-            while activities.advance().await.unwrap() {
-                let activity = activities.deserialize_current().unwrap();
-                let act_id: DocumentId = activity.as_i64();
+                    let telemetry = self
+                        .dependencies
+                        .strava_db()
+                        .telemetries
+                        .get(act_id)
+                        .await
+                        .unwrap();
 
-                let telemetry = self
-                    .dependencies
-                    .strava_db()
-                    .get_telemetry_by_id(act_id)
-                    .await
-                    .unwrap();
+                    // Run GradientFinder
+                    if act_id == route.master_activity_id {
+                        let mut gradients =
+                            gradient_finder::GradientFinder::find_gradients(&telemetry);
 
-                // If database already contains efforts for this activity then it means we already downloaded them
-                if !self.dependencies.gc_db().has_efforts_for_activity(act_id).await {
-                    // Populate efforts collection
-                    activity.segment_efforts.iter().for_each(|effort| {
-                        // Extract segment effort
-                        efforts_in_matched_activities.push(Effort {
-                            _id: effort.id as f64,
-                            athlete_id: effort.athlete.id,
-                            segment_id: effort.segment.id,
-                            activity_id: effort.activity.id,
+                        if gradients.len() > 0 {
+                            let remapped_indexes = GeoUtils::get_index_mapping(
+                                &route.polyline,
+                                &telemetry.latlng.data,
+                            );
+                            gradients.iter_mut().for_each(|gradient| {
+                                // Search through the segment efforts and find a matching start to fill the location data
+                                gradient.location_city = route.location_city.clone();
+                                gradient.location_country = Some(route.location_country.clone());
 
-                            moving_time: effort.moving_time,
-                            start_date_local: effort.start_date_local.clone(),
-                            distance_from_start: telemetry.distance.data
-                                [effort.start_index as usize],
-                        });
-                    });
-                }
-
-                // Run GradientFinder
-                if act_id == route.master_activity_id {
-                    let mut gradients = gradient_finder::GradientFinder::find_gradients(&telemetry);
-
-                    if gradients.len() > 0 {
-                        let remapped_indexes =
-                            GeoUtils::get_index_mapping(&route.polyline, &telemetry.latlng.data);
-                        gradients.iter_mut().for_each(|gradient| {
-                            // Search through the segment efforts and find a matching start to fill the location data
-                            gradient.location_city = route.location_city.clone();
-                            gradient.location_country = Some(route.location_country.clone());
-
-                            for effort in &activity.segment_efforts {
-                                if gradient.start_index >= effort.start_index as usize {
-                                    gradient.location_city = effort.segment.city.clone();
-                                    gradient.location_country = effort.segment.country.clone();
+                                for effort in &activity.segment_efforts {
+                                    if gradient.start_index >= effort.start_index as usize {
+                                        gradient.location_city = effort.segment.city.clone();
+                                        gradient.location_country = effort.segment.country.clone();
+                                    }
                                 }
-                            }
 
-                            // Rewrite indexes with the remapped ones
-                            gradient.start_index = remapped_indexes[gradient.start_index];
-                            gradient.end_index = remapped_indexes[gradient.end_index];
-                        });
+                                // Rewrite indexes with the remapped ones
+                                gradient.start_index = remapped_indexes[gradient.start_index];
+                                gradient.end_index = remapped_indexes[gradient.end_index];
+                            });
 
-                        route.gradients = gradients;
+                            route.gradients = gradients;
+                        }
                     }
                 }
             }
 
-            self.dependencies.gc_db().update_route(&route).await;
-
-            for effort in efforts_in_matched_activities {
-                self.dependencies.gc_db().update_effort(&effort).await;
-            }
+            self.dependencies.gc_db().routes.update(&route).await;
         }
     }
 }

@@ -1,4 +1,3 @@
-use std::sync::RwLock;
 
 use chrono::Utc;
 use curl::easy::{Easy, List};
@@ -6,10 +5,8 @@ use serde_derive::Deserialize;
 use serde_json::Value;
 use toml;
 
-use crate::data_types::strava::athlete::{AthleteTokens, AthleteId};
-use crate::database::strava_db::StravaDB;
-
-use crate::{logln, logvbln};
+use crate::data_types::strava::athlete::{AthleteId, AthleteTokens};
+use crate::{logln, logvbln, TokenExchange};
 
 const STRAVA_BASE_URL: &str = "https://www.strava.com/api/v3/";
 
@@ -21,16 +18,15 @@ struct Secrets {
 }
 
 pub struct StravaApi {
-    athlete_id: AthleteId, 
-    tokens: RwLock<AthleteTokens>,
+    athlete_id: AthleteId,
+    token_exchange: TokenExchange,
     secrets: Secrets,
-    persistance: StravaDB,
 }
 
 impl StravaApi {
     const CC: &str = "StravaAPI";
 
-    fn get_refreshed_tokens(&self) {
+    fn get_refreshed_tokens(&self) -> AthleteTokens {
         let mut handle = Easy::new();
 
         let header = format!(
@@ -40,7 +36,8 @@ impl StravaApi {
             self.secrets.client_id,
             self.secrets.client_secret,
             self.secrets.user_authorization_code,
-            self.tokens.read().unwrap().refresh_token
+
+            self.token_exchange.get_tokens().refresh_token
         );
 
         handle
@@ -65,9 +62,7 @@ impl StravaApi {
         let s = std::str::from_utf8(&buffer_response);
         logvbln!("{:?}", s);
 
-        let new_tokens: AthleteTokens = serde_json::from_str(s.unwrap()).unwrap();
-        let mut tokens = self.tokens.write().unwrap();
-        *tokens = new_tokens;
+        serde_json::from_str(s.unwrap()).unwrap()
     }
 
     async fn get_request(&self, url: &str) -> Option<serde_json::Value> {
@@ -135,44 +130,36 @@ impl StravaApi {
     }
 
     fn get_access_token(&self) -> String {
-        return self.tokens.read().unwrap().access_token.clone()
+        return self.token_exchange.get_tokens().access_token.clone();
     }
 
     async fn refresh_tokens_if_expired(&self) {
         let current_ts: i64 = Utc::now().timestamp();
 
-        if current_ts > self.tokens.read().unwrap().expires_at as i64 {
+        if current_ts > self.token_exchange.get_tokens().expires_at as i64 {
             logln!("Tokens EXPIRED. Refreshing");
 
-            self.get_refreshed_tokens();
-
-            self.persistance
-                .set_athlete_tokens(self.athlete_id, &self.tokens.read().unwrap())
-                .await;
+            let new_tokens = self.get_refreshed_tokens();            
+            self.token_exchange.set_tokens(&new_tokens).await;
         }
     }
 
-    pub async fn new(athlete_id: i64) -> Option<Self> {
-        let mut this = Self {
+    pub fn new(
+        token_exchange: TokenExchange,
+        athlete_id: i64,
+    ) -> Self {
+        Self {
             athlete_id,
+            token_exchange,
             secrets: StravaApi::read_secrets_from_file(),
-            persistance: StravaDB::new().await,
-            tokens: RwLock::new(AthleteTokens::default())
-        };
-
-        if let Some(athlete_tokens) = this.persistance.get_athlete_tokens(athlete_id).await {
-            this.tokens = RwLock::new(athlete_tokens);
-
-            return Some(this);
         }
-
-        None
     }
 
     pub async fn get_activity(&self, act_id: i64) -> Option<serde_json::Value> {
-        self.get_request(            
+        self.get_request(
             &(STRAVA_BASE_URL.to_string() + &format!("activities/{}", act_id.to_string())),
-        ).await
+        )
+        .await
     }
 
     pub async fn get_activity_telemetry(&self, act_id: i64) -> Option<serde_json::Value> {
@@ -184,7 +171,8 @@ impl StravaApi {
     pub async fn get_segment(&self, seg_id: i64) -> Option<serde_json::Value> {
         self.get_request(
             &(STRAVA_BASE_URL.to_string() + &format!("segments/{}", seg_id.to_string())),
-        ).await
+        )
+        .await
     }
 
     pub async fn get_segment_telemetry(&self, seg_id: i64) -> Option<serde_json::Value> {
@@ -194,7 +182,8 @@ impl StravaApi {
                     "/segments/{}/streams?keys=latlng,distance,altitude&key_by_type=true",
                     seg_id.to_string()
                 )),
-        ).await
+        )
+        .await
     }
 
     pub async fn list_athlete_activities(
@@ -204,13 +193,15 @@ impl StravaApi {
         per_page: usize,
         page: usize,
     ) -> Option<Vec<Value>> {
-        let result = self.get_request(
-            &(STRAVA_BASE_URL.to_string()
-                + &format!(
-                    "athlete/activities?after={}&before={}&per_page={}&page={}",
-                    after_ts, before_ts, per_page, page
-                )),
-        ).await;
+        let result = self
+            .get_request(
+                &(STRAVA_BASE_URL.to_string()
+                    + &format!(
+                        "athlete/activities?after={}&before={}&per_page={}&page={}",
+                        after_ts, before_ts, per_page, page
+                    )),
+            )
+            .await;
 
         if let Some(activities) = result {
             return Some(activities.as_array().unwrap().to_vec());

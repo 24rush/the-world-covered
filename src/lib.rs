@@ -1,20 +1,27 @@
+use std::sync::RwLock;
+
 use data_types::{
     gc::route::Route,
     strava::{
         activity::Activity,
-        athlete::{AthleteData, AthleteId},
+        athlete::{AthleteData, AthleteId, AthleteTokens},
     },
 };
-use database::{gc_db::GCDB, strava_db::StravaDB};
+use database::{
+    gc_db::GCDB,
+    strava_db::{AthletesCollection, StravaDB},
+};
 use maintenance::db_integrity_checks::Options;
 use mongodb::bson;
 use util::facilities::DependenciesBuilder;
 
 use crate::maintenance::db_integrity_checks::DBIntegrityChecker;
-use processors::{DataCreationPipeline, DataCreationPipelineOptions, SubOperationType, PipelineOperationType};
+use processors::{
+    DataCreationPipeline, DataCreationPipelineOptions, PipelineOperationType, SubOperationType,
+};
 use strava::api::StravaApi;
 
-use crate::{database::strava_db::ResourceType, util::logging};
+use crate::util::logging;
 
 pub mod data_types;
 mod database;
@@ -23,6 +30,37 @@ mod util;
 
 mod maintenance;
 mod processors;
+
+pub struct TokenExchange {
+    athlete_id: AthleteId,
+    athletes_collection: AthletesCollection,
+    tokens: RwLock<AthleteTokens>,
+}
+
+impl TokenExchange {
+    async fn new(
+        athletes_collection: AthletesCollection,
+        athlete_id: AthleteId,
+        athlete_tokens: AthleteTokens,
+    ) -> TokenExchange {
+        return Self {
+            athlete_id,
+            athletes_collection,
+            tokens: RwLock::new(athlete_tokens),
+        };
+    }
+
+    fn get_tokens(&self) -> AthleteTokens {
+        self.tokens.read().unwrap().clone()
+    }
+
+    async fn set_tokens(&self, tokens: &AthleteTokens) {
+        self.athletes_collection
+            .set_athlete_tokens(self.athlete_id, tokens)
+            .await;
+        *self.tokens.write().unwrap() = tokens.clone();
+    }
+}
 
 pub struct App {
     loggedin_athlete_id: Option<AthleteId>,
@@ -33,26 +71,35 @@ pub struct App {
 
 impl App {
     const CC: &str = "App";
+    const LOCAL_MONGO_URL: &str = "mongodb://localhost:27017";
 
-    pub async fn anonym_athlete() -> Self {
+    pub async fn anonym_athlete() -> App {
         Self {
             loggedin_athlete_id: None,
             strava_api: None,
-            strava_db: StravaDB::new().await,
-            gc_db: GCDB::new().await,
+            strava_db: StravaDB::new(App::LOCAL_MONGO_URL).await,
+            gc_db: GCDB::new(App::LOCAL_MONGO_URL).await,
         }
     }
 
-    pub async fn with_athlete(ath_id: AthleteId) -> Option<Self> {
-        logging::set_global_level(logging::LogLevel::VERBOSE);
+    pub async fn with_athlete(athlete_id: AthleteId) -> Option<App> {
+        let mut this = Self {
+            loggedin_athlete_id: Some(athlete_id),
+            strava_api: None,
+            strava_db: StravaDB::new(App::LOCAL_MONGO_URL).await,
+            gc_db: GCDB::new(App::LOCAL_MONGO_URL).await,
+        };
 
-        if let Some(strava_api) = StravaApi::new(ath_id).await {
-            return Some(Self {
-                loggedin_athlete_id: Some(ath_id),
-                strava_api: Some(strava_api),
-                strava_db: StravaDB::new().await,
-                gc_db: GCDB::new().await,
-            });
+        if let Some(athlete_data) = this.strava_db.athletes.get_athlete_data(athlete_id).await {
+            let token_exchange = TokenExchange::new(
+                this.strava_db.get_athletes_collection(),
+                athlete_id,
+                athlete_data.tokens,
+            )
+            .await;
+            this.strava_api = Some(StravaApi::new(token_exchange, athlete_id));
+
+            return Some(this);
         }
 
         None
@@ -62,57 +109,34 @@ impl App {
         &self,
         stages: Vec<bson::Document>,
     ) -> Vec<mongodb::bson::Document> {
-        self.strava_db.query_activity_docs(stages).await
-    }
-
-    pub async fn query_efforts(&self, stages: Vec<bson::Document>) -> Vec<mongodb::bson::Document> {
-        self.strava_db.query_efforts(stages).await
+        self.strava_db
+            .activities
+            .query_activities_docs(stages)
+            .await
     }
 
     pub async fn query_routes(&self, stages: Vec<bson::Document>) -> Vec<Route> {
-        self.gc_db.query_routes(stages).await
+        self.gc_db.routes.query(stages).await
     }
 
     pub async fn query_statistics(&self) -> Vec<mongodb::bson::Document> {
-        self.gc_db.query_statistics().await
-    }
-
-    pub async fn get_athlete_data(&self, id: i64) -> Option<AthleteData> {
-        self.strava_db.get_athlete_data(id).await
+        self.gc_db.statistics.query().await
     }
 
     pub async fn get_activity(&self, id: i64) -> Option<Activity> {
-        self.strava_db.get_activity(id).await
+        self.strava_db.activities.get(id).await
     }
 
-    pub async fn get_routes(&self, ath_id: AthleteId) -> Vec<Route> {
-        let mut cursor_routes = self.gc_db.get_routes(ath_id).await;
-        let mut routes: Vec<Route> = Vec::new();
-
-        while cursor_routes.advance().await.unwrap() {
-            routes.push(cursor_routes.deserialize_current().unwrap())
-        }
-
-        routes
-    }
-
+    // Currently unused, to be used when new athletes are uploaded or db rewritten
     pub async fn create_athlete(&self, id: i64) -> AthleteData {
         let mut default_athlete: AthleteData = Default::default();
         default_athlete._id = id;
-        self.strava_db.set_athlete_data(&default_athlete).await;
+        self.strava_db
+            .athletes
+            .set_athlete_data(&default_athlete)
+            .await;
 
         default_athlete
-    }
-
-    pub async fn store_athlete_activity(&mut self, act_id: i64) {
-        logln!("Downloading activity: {}", act_id);
-
-        if let Some(mut new_activity) = self.strava_api.as_ref().unwrap().get_activity(act_id).await
-        {
-            self.strava_db
-                .store_resource(ResourceType::Activity, act_id, &mut new_activity)
-                .await;
-        }
     }
 
     pub async fn start_db_creation(&self) {
