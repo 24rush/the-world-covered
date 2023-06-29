@@ -1,4 +1,4 @@
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use data_types::{
     gc::route::Route,
@@ -11,13 +11,11 @@ use database::{
     gc_db::GCDB,
     strava_db::{AthletesCollection, StravaDB},
 };
-use maintenance::db_integrity_checks::Options;
 use mongodb::bson;
 use util::facilities::DependenciesBuilder;
 
-use crate::maintenance::db_integrity_checks::DBIntegrityChecker;
 use processors::{
-    DataCreationPipeline, DataCreationPipelineOptions, PipelineOperationType, SubOperationType,
+    DataPipeline, DataCreationPipelineOptions, PipelineOperationType, SubOperationType,
 };
 use strava::api::StravaApi;
 
@@ -27,8 +25,6 @@ pub mod data_types;
 mod database;
 mod strava;
 mod util;
-
-mod maintenance;
 mod processors;
 
 pub struct TokenExchange {
@@ -64,9 +60,9 @@ impl TokenExchange {
 
 pub struct App {
     loggedin_athlete_id: Option<AthleteId>,
-    strava_api: Option<StravaApi>,
-    strava_db: StravaDB,
-    gc_db: GCDB,
+    strava_api: Option<Arc<StravaApi>>,
+    strava_db: Arc<StravaDB>,
+    gc_db: Arc<GCDB>,
 }
 
 impl App {
@@ -77,8 +73,8 @@ impl App {
         Self {
             loggedin_athlete_id: None,
             strava_api: None,
-            strava_db: StravaDB::new(App::LOCAL_MONGO_URL).await,
-            gc_db: GCDB::new(App::LOCAL_MONGO_URL).await,
+            strava_db: Arc::new(StravaDB::new(App::LOCAL_MONGO_URL).await),
+            gc_db: Arc::new(GCDB::new(App::LOCAL_MONGO_URL).await),
         }
     }
 
@@ -86,8 +82,8 @@ impl App {
         let mut this = Self {
             loggedin_athlete_id: Some(athlete_id),
             strava_api: None,
-            strava_db: StravaDB::new(App::LOCAL_MONGO_URL).await,
-            gc_db: GCDB::new(App::LOCAL_MONGO_URL).await,
+            strava_db: Arc::new(StravaDB::new(App::LOCAL_MONGO_URL).await),
+            gc_db: Arc::new(GCDB::new(App::LOCAL_MONGO_URL).await),
         };
 
         if let Some(athlete_data) = this.strava_db.athletes.get_athlete_data(athlete_id).await {
@@ -97,7 +93,8 @@ impl App {
                 athlete_data.tokens,
             )
             .await;
-            this.strava_api = Some(StravaApi::new(token_exchange, athlete_id));
+        
+            this.strava_api = Some(Arc::new(StravaApi::new(token_exchange, athlete_id)));
 
             return Some(this);
         }
@@ -139,38 +136,20 @@ impl App {
         default_athlete
     }
 
-    pub async fn start_db_creation(&self) {
-        DataCreationPipeline::new(
+    pub async fn start_data_pipeline(&self) {
+        DataPipeline::new(
             DependenciesBuilder::new()
                 .with_gc_db(&self.gc_db)
                 .with_strava_db(&self.strava_db)
+                .with_strava_api(&self.strava_api.clone().unwrap())
                 .build(),
-        )
-        .start(
             self.loggedin_athlete_id.unwrap(),
-            &DataCreationPipelineOptions {
-                commonalities: PipelineOperationType::Enabled(SubOperationType::Rewrite),
-                //commonalities: PipelineOperationType::Disabled,
-                route_processor: PipelineOperationType::Enabled(SubOperationType::None),
-                //route_processor: PipelineOperationType::Disabled,
-            },
         )
-        .await;
-    }
-
-    pub async fn start_db_integrity_check(&mut self) {
-        DBIntegrityChecker::new(
-            DependenciesBuilder::new()
-                .with_strava_api(&mut self.strava_api.as_ref().unwrap())
-                .with_strava_db(&self.strava_db)
-                .build(),
-            &Options {
-                activity_sync: PipelineOperationType::Enabled(SubOperationType::None),
-                segment_caching: PipelineOperationType::Disabled,
-                segment_telemetry: PipelineOperationType::Disabled,
-            },
-        )
-        .start(self.loggedin_athlete_id.unwrap())
+        .start(&DataCreationPipelineOptions {
+            activity_syncer: PipelineOperationType::Enabled(SubOperationType::None),
+            route_matching: PipelineOperationType::Enabled(SubOperationType::Rewrite),
+            route_processor: PipelineOperationType::Enabled(SubOperationType::None),
+        })
         .await;
     }
 }

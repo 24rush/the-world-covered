@@ -1,7 +1,7 @@
-use std::f32::consts::PI;
 use geo_types::Coord;
+use std::f32::consts::PI;
 
-use crate::data_types::strava::telemetry::{LatLng};
+use crate::data_types::strava::telemetry::LatLng;
 
 pub struct GeoUtils;
 
@@ -43,7 +43,7 @@ impl GeoUtils {
         let mut max_lat: f64 = 0.;
         let mut max_long: f64 = 0.;
 
-        line_string.coords().for_each(|coord| {            
+        line_string.coords().for_each(|coord| {
             min_lat = coord.x.min(min_lat);
             min_long = coord.y.min(min_long);
 
@@ -67,14 +67,9 @@ impl GeoUtils {
         line_string.coords().into_iter().cloned().collect()
     }
 
-    // Returns a list of indexes which point to the values present in the polyline received
-    pub fn get_index_mapping(polyline: &String, latlngs: &Vec<LatLng>) -> Vec<usize> {
-        let poly_coords = GeoUtils::get_coords_from_poly(polyline);
-
-        let mut index_in_poly_coords: usize = 0;
-        let mut remapped_indexes: Vec<usize> = vec![0; latlngs.len()];
-        let mut coordinates: Vec<Coord> = Vec::new();
-
+    // Returns a list of indexes j which point to the indexes closest to telemetry[i]
+    pub fn create_polyline_mapping_table(polyline: &String, telemetry_latlngs: &Vec<LatLng>) -> Vec<usize> {
+        // Equality operator between a Coord and a Latlng with a slight tolerance
         let coord_eq_latlng = |coord: &Coord, latlng: &LatLng| -> bool {
             if (coord.x - latlng[1] as f64).abs() <= 0.00005
                 && (coord.y - latlng[0] as f64).abs() <= 0.00005
@@ -85,16 +80,20 @@ impl GeoUtils {
             false
         };
 
-        latlngs
+        // Polyline decoded as a Coord vector
+        let poly_coords = GeoUtils::get_coords_from_poly(polyline);
+        let mut index_in_poly_coords: usize = 0;
+        let mut remapped_indexes: Vec<usize> = vec![0; telemetry_latlngs.len()];
+
+        telemetry_latlngs
             .iter()
             .enumerate()
             .for_each(|(index_in_telemetry, telem_latlng)| {
                 remapped_indexes[index_in_telemetry] = index_in_poly_coords;
 
-                if (index_in_poly_coords as usize) < poly_coords.len()
-                    && coord_eq_latlng(&poly_coords[index_in_poly_coords as usize], telem_latlng)
+                if index_in_poly_coords < poly_coords.len()
+                    && coord_eq_latlng(&poly_coords[index_in_poly_coords], telem_latlng)
                 {
-                    coordinates.push(poly_coords[index_in_poly_coords as usize]);
                     index_in_poly_coords += 1;
                 }
             });

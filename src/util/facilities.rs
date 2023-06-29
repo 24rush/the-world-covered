@@ -1,3 +1,4 @@
+use std::{sync::Arc};
 use crate::{
     database::{gc_db::GCDB, strava_db::StravaDB},
     strava::api::StravaApi,
@@ -11,36 +12,44 @@ pub enum Required {
     GcDB,
 }
 
-pub struct Facilities<'a> {
-    strava_api: Option<&'a StravaApi>,
-    strava_db: Option<&'a StravaDB>,
-    gc_db: Option<&'a GCDB>,
+pub struct Facilities {
+    strava_api: Option<Arc<StravaApi>>,
+    strava_db: Option<Arc<StravaDB>>,
+    gc_db: Option<Arc<GCDB>>,
 }
 
-impl<'a> Facilities<'a> {
-    pub fn strava_db(&self) -> &StravaDB {
-        self.strava_db.unwrap()
+impl Facilities {
+    pub fn strava_db(&self) -> Arc<StravaDB> {
+        Arc::clone(&self.strava_db.as_ref().unwrap())
     }
 
-    pub fn gc_db(&self) -> &GCDB {
-        self.gc_db.unwrap()
+    pub fn gc_db(&self) -> Arc<GCDB> {
+        Arc::clone(self.gc_db.as_ref().unwrap())
     }
 
-    pub fn strava_api(&self) -> &StravaApi {
-        self.strava_api.unwrap()
+    pub fn strava_api(&self) -> Arc<StravaApi> {
+        Arc::clone(self.strava_api.as_ref().unwrap())
+    }
+
+    pub fn clone(&self) -> Facilities {
+        Self {
+            strava_api: Some(self.strava_api()),
+            strava_db: Some(self.strava_db()),
+            gc_db: Some(self.gc_db()),
+        }
     }
 
     pub fn check(&self, required: Vec<Required>) {
         for depend in &required {
             match (*depend) as usize {
                 0 => {
-                    self.strava_api.expect("Expecting Strava API");
+                    self.strava_api.as_ref().expect("Expecting Strava API");
                 }
                 1 => {
-                    self.strava_db.expect("Expecting Strava database");
+                    self.strava_db.as_ref().expect("Expecting Strava database");
                 }
                 2 => {
-                    self.gc_db.expect("Expecting GC database");
+                    self.gc_db.as_ref().expect("Expecting GC database");
                 }
                 _ => panic!("Unknown requirement"),
             }
@@ -48,45 +57,40 @@ impl<'a> Facilities<'a> {
     }
 }
 
-pub struct DependenciesBuilder<'a> {
-    dependencies: Facilities<'a>,
+pub struct DependenciesBuilder {
+    dependencies: Facilities,
 }
 
-impl<'a> DependenciesBuilder<'a> {
+impl DependenciesBuilder {
     const CC: &str = "DependenciesBuilder";
 
     pub fn new() -> Self {
-        Self {            
+        Self {
             dependencies: Facilities {
                 strava_api: None,
                 strava_db: None,
                 gc_db: None,
-            },
+            }
+            .into(),
         }
     }
 
-    pub fn with_strava_db(
-        &'a mut self,
-        strava_db: &'a StravaDB,
-    ) -> &'a mut DependenciesBuilder<'a> {
-        self.dependencies.strava_db = Some(strava_db);
+    pub fn with_strava_db(&mut self, strava_db: &Arc<StravaDB>) -> &mut DependenciesBuilder {
+        self.dependencies.strava_db = Some(Arc::clone(strava_db));
         self
     }
 
-    pub fn with_gc_db(&'a mut self, gc_db: &'a GCDB) -> &'a mut DependenciesBuilder<'a> {
-        self.dependencies.gc_db = Some(gc_db);
+    pub fn with_gc_db(&mut self, gc_db: &Arc<GCDB>) -> &mut DependenciesBuilder {
+        self.dependencies.gc_db = Some(Arc::clone(gc_db));
         self
     }
 
-    pub fn with_strava_api(
-        &'a mut self,
-        strava_api: &'a StravaApi,
-    ) -> &'a mut DependenciesBuilder<'a> {
-        self.dependencies.strava_api = Some(strava_api);
+    pub fn with_strava_api(&mut self, strava_api: &Arc<StravaApi>) -> &mut DependenciesBuilder {
+        self.dependencies.strava_api = Some(Arc::clone(strava_api));
         self
     }
 
-    pub fn build(&mut self) -> &mut Facilities<'a> {
-        &mut self.dependencies
+    pub fn build(&mut self) -> Facilities {
+        self.dependencies.clone()
     }
 }

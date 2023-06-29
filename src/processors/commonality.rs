@@ -19,8 +19,10 @@ pub type MatchedRoutesResult = Vec<Route>;
 // INTERNAL Type
 type GroupId = DocumentId;
 type MatchIndex = i32;
+
 type LatLngReduced = i32;
-type TelemetryTypeData = HashMap<LatLngReduced, HashMap<LatLngReduced, ActivityOccurence>>;
+type ActivityIdsForLatLng = HashMap<LatLngReduced, HashMap<LatLngReduced, HashSet<DocumentId>>>;
+
 type MatchDistribution = HashMap<MatchIndex, (DocumentId, usize)>;
 
 #[derive(Default)]
@@ -39,11 +41,6 @@ type MatchedTelemetriesResult = Vec<HashSet<DocumentId>>;
 // Percentage of GPS points that need to match so that we can consider two routes similar
 const MATCH_THRESHOLD: MatchIndex = 85;
 
-#[derive(Default, Debug)]
-struct ActivityOccurence {
-    pub set_activities: HashSet<DocumentId>,
-}
-
 #[derive(Default)]
 pub struct Commonality {
     // Number of GPS points per each activity loaded
@@ -52,10 +49,11 @@ pub struct Commonality {
     // Length in meter for each activity loaded
     activity_lengths: HashMap<DocumentId, usize>,
 
-    // Map of all the points from the activities loaded
-    unique_points: HashMap<String, TelemetryTypeData>,
+    // All the telemetry points organized by type (cycling, hike, etc.)
+    unique_points: HashMap<String, ActivityIdsForLatLng>,
 
     // Container storing number of matching points between two activies
+    // Act A -> Act B (number)
     act_to_act_points: HashMap<DocumentId, HashMap<DocumentId, u32>>,
 
     // Counter for creating route indexes
@@ -125,13 +123,9 @@ impl<'a> Commonality {
                 .entry(telemetry.r#type.to_string())
                 .or_default()
                 .entry(reduced_lat)
-                .or_insert(HashMap::from([(
-                    reduced_long,
-                    ActivityOccurence::default(),
-                )]))
+                .or_insert(HashMap::from([(reduced_long, HashSet::new())]))
                 .entry(reduced_long)
-                .or_default()
-                .set_activities;
+                .or_default();
 
             // Add the current activity id to the list of activities containing this point
             set_acts_sharing_point.insert(src_act_id);
@@ -152,11 +146,11 @@ impl<'a> Commonality {
 
     // Output is vector of routes which contain matched activities or standalone ones (that don't have any match)
     pub fn matched_routes(&mut self) -> Vec<Route> {
-        logvbln!("Processed {} {}", self.acts_total, self.acts_unique.len());
+        logvbln!("Processed {} activities with {} points", self.acts_total, self.points_total);
 
         // Vector of (match percentage, act_id, act_id)
         let results = self.generate_match_results();
-        //logvbln!("{:#?}", results);
+        logvbln!("{:#?}", results);
 
         // Vector of set of activities that are considered similar
         self.merge_results(&results)
@@ -164,17 +158,6 @@ impl<'a> Commonality {
 
     // PRIVATES
     fn generate_match_results(&self) -> Vec<Telem2TelemMatchResult> {
-        let compute_match_percent = |src, count| -> i32 {
-            let data_len = self.activity_datapoints_count[src] as f32;
-            let clamp_count = if count as f32 > data_len {
-                data_len
-            } else {
-                count as f32
-            };
-
-            (100.0 * (clamp_count / data_len)) as i32
-        };
-
         let distance_difference_percentage = |src, dest| -> i32 {
             let src_size = self.activity_lengths[src] as i32;
             let dest_size = self.activity_lengths[dest] as i32;
@@ -189,9 +172,10 @@ impl<'a> Commonality {
         self.act_to_act_points.iter().for_each(|(src, dest_map)| {
             dest_map.iter().for_each(|(dest, count)| {
                 // Match percentage between activity src and dest
-                let src_2_dest_match = compute_match_percent(src, *count);
+                let src_2_dest_match =
+                    (100.0 * *count as f32 / self.activity_datapoints_count[src] as f32) as i32;
 
-                // If percentage is higher than threshold and their length are also proportional then create result
+                // If percentage is higher than threshold and their lengths are also proportional then create result
                 if src_2_dest_match >= MATCH_THRESHOLD
                     && distance_difference_percentage(src, dest) <= (100 - MATCH_THRESHOLD)
                 {
@@ -388,11 +372,14 @@ impl<'a> Commonality {
             count += group.len();
 
             let mut max_percent = 0;
-            let mut last_activity : DocumentId = 0;
+            let mut last_activity: DocumentId = 0;
             let mut master_act_id: DocumentId = 0;
 
-            group_info.match_distribution.take().iter().for_each(
-                |(match_perc, (act_id, _))| {
+            group_info
+                .match_distribution
+                .take()
+                .iter()
+                .for_each(|(match_perc, (act_id, _))| {
                     // Required for single activity groups which only contain themselves with 100%
                     last_activity = *act_id;
 
@@ -400,8 +387,7 @@ impl<'a> Commonality {
                         max_percent = *match_perc;
                         master_act_id = *act_id;
                     }
-                },
-            );
+                });
 
             if master_act_id == 0 {
                 master_act_id = last_activity;

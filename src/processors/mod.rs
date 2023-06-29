@@ -1,18 +1,21 @@
+use chrono::Utc;
 use geo_types::Coord;
 use std::collections::HashSet;
 
 use crate::{
     data_types::{common::DocumentId, strava::athlete::AthleteId},
+    logvbln,
     util::{
         facilities::{Facilities, Required},
         geo::GeoUtils,
-    },
+    }, processors::sync_from_strava::StravaDBSync,
 };
 
 use self::commonality::Commonality;
 
 pub mod commonality;
 pub mod gradient_finder;
+pub mod sync_from_strava;
 
 #[derive(PartialEq, Default)]
 pub enum SubOperationType {
@@ -30,50 +33,109 @@ pub enum PipelineOperationType {
     Disabled,
 }
 
+#[derive(Default)]
 pub struct DataCreationPipelineOptions {
-    pub commonalities: PipelineOperationType,
-    pub route_processor: PipelineOperationType,
+    pub activity_syncer: PipelineOperationType,
+    pub route_matching: PipelineOperationType,
+    pub route_processor: PipelineOperationType,    
 }
 
-pub struct DataCreationPipeline<'a> {
+pub struct DataPipeline {
     athlete_id: AthleteId,
-    dependencies: &'a mut Facilities<'a>,
+    dependencies: Facilities,
 }
 
-impl<'a> DataCreationPipeline<'a> {
+impl DataPipeline {
     const CC: &str = "Pipeline";
 
-    pub fn new(dependencies: &'a mut Facilities<'a>) -> Self {
+    pub fn new(dependencies: Facilities, athlete_id: AthleteId) -> Self {
         dependencies.check(vec![Required::GcDB, Required::StravaDB]);
 
         Self {
-            athlete_id: 0,
+            athlete_id,
             dependencies,
         }
     }
 
-    pub async fn start(&'a mut self, athlete_id: AthleteId, options: &DataCreationPipelineOptions) {
-        self.athlete_id = athlete_id;
+    pub async fn start(&mut self, options: &DataCreationPipelineOptions) {
+        if options.activity_syncer != PipelineOperationType::Disabled {
+            // 0 //
+            // Sync athlete's activities
+            self.run_sync_activities().await;
+        }
 
-        if options.commonalities != PipelineOperationType::Disabled {
+        if options.route_matching != PipelineOperationType::Disabled {
             // 1 //
             // Run route matching module => update routes collections
-            if options.commonalities == PipelineOperationType::Enabled(SubOperationType::Rewrite) {
+            if options.route_matching == PipelineOperationType::Enabled(SubOperationType::Rewrite) {
                 // Clear previous results and store latest ones
                 self.dependencies.gc_db().routes.clear_routes().await;
+
                 self.run_rewrite_commonalities().await;
             }
 
-            if options.commonalities == PipelineOperationType::Enabled(SubOperationType::Update) {
+            if options.route_matching == PipelineOperationType::Enabled(SubOperationType::Update) {
                 self.run_update_commonalities().await;
             }
         }
 
         if options.route_processor == PipelineOperationType::Enabled(SubOperationType::None) {
             // 2 //
-            // Using created routes, run RouteProcessor => efforts collections, updates route collection
+            // Using created routes, run RouteProcessor
             self.run_route_processor().await;
         }
+    }
+
+    async fn run_sync_activities(&mut self) {
+        // Sync =
+        // all activities from 0 to before_ts (if before_ts is not 0)
+        //  +
+        // all activities from after_ts to current timestamp (if interval passed and first stage is completed)
+        let mut syncer = StravaDBSync::new(self.dependencies.clone(), self.athlete_id);
+
+        let athlete_data = self
+            .dependencies
+            .strava_db()
+            .athletes
+            .get_athlete_data(self.athlete_id)
+            .await
+            .unwrap();
+
+        let (after_ts, before_ts) = (athlete_data.after_ts, athlete_data.before_ts);
+
+        logvbln!("sync_athlete_activities {} {}", before_ts, after_ts);
+
+        if before_ts != 0 && after_ts != before_ts {
+            if let (last_activity_ts, false) =
+                syncer.download_activities_in_range(0, before_ts).await
+            {
+                // when done move before to 0 and after to last activity ts
+                self.dependencies
+                    .strava_db()
+                    .athletes
+                    .save_after_before_timestamps(self.athlete_id, last_activity_ts, 0)
+                    .await;
+            }
+        } else {
+            let current_ts: i64 = Utc::now().timestamp();
+            let days_since_last_sync = (current_ts - after_ts) / 86400;
+
+            if days_since_last_sync >= 0 {
+                if let (_, false) = syncer
+                    .download_activities_in_range(after_ts, current_ts)
+                    .await
+                {
+                    // when done move after to current
+                    self.dependencies
+                        .strava_db()
+                        .athletes
+                        .save_after_before_timestamps(self.athlete_id, current_ts, current_ts)
+                        .await;
+                }
+            }
+        }
+
+        logvbln!("done syncing.");
     }
 
     async fn run_update_commonalities(&self) {
@@ -302,7 +364,6 @@ impl<'a> DataCreationPipeline<'a> {
         while routes.advance().await.unwrap() {
             let mut route = routes.deserialize_current().unwrap();
 
-            // Find the master activity of this routes: the longest one from the matched ones
             let master_activity = self
                 .dependencies
                 .strava_db()
@@ -312,7 +373,6 @@ impl<'a> DataCreationPipeline<'a> {
                 .unwrap();
 
             // Extract data from master activity and put it into route
-            //route.master_activity_id = master_activity._id as DocumentId;
             route.r#type = "Route".to_string();
             route.r#type.push_str(&master_activity.r#type.to_string());
 
@@ -337,7 +397,7 @@ impl<'a> DataCreationPipeline<'a> {
                 GeoUtils::distance(route.center_coord, Coord::from((26.096306, 44.439663))) as i32
                     / 100;
 
-            // Get all matched activities and fill in all the efforts
+            // Get all matched activities and find the gradients
             if let Some(mut activities) = self
                 .dependencies
                 .strava_db()
@@ -359,12 +419,12 @@ impl<'a> DataCreationPipeline<'a> {
                         .unwrap();
 
                     // Run GradientFinder
-                    if act_id == route.master_activity_id {
+                    if false && act_id == route.master_activity_id {
                         let mut gradients =
                             gradient_finder::GradientFinder::find_gradients(&telemetry);
 
                         if gradients.len() > 0 {
-                            let remapped_indexes = GeoUtils::get_index_mapping(
+                            let remapped_indexes = GeoUtils::create_polyline_mapping_table(
                                 &route.polyline,
                                 &telemetry.latlng.data,
                             );

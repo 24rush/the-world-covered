@@ -37,11 +37,13 @@ impl ActivitiesCollection {
     }
 
     fn typed_collection(&self) -> Collection<Activity> {
-        self.db_conn.typed_collection(ActivitiesCollection::COLL_NAME)
+        self.db_conn
+            .typed_collection(ActivitiesCollection::COLL_NAME)
     }
 
     fn raw_collection(&self) -> Collection<mongodb::bson::Document> {
-        self.db_conn.typed_collection(ActivitiesCollection::COLL_NAME)
+        self.db_conn
+            .typed_collection(ActivitiesCollection::COLL_NAME)
     }
 
     // GETTERS
@@ -189,9 +191,7 @@ impl ActivitiesCollection {
     }
 
     pub async fn exists(&self, act_id: i64) -> bool {
-        self.db_conn
-            .exists(&self.raw_collection(), act_id)
-            .await
+        self.db_conn.exists(&self.raw_collection(), act_id).await
     }
 
     pub async fn store(&self, act_id: i64, json: &mut serde_json::Value) {
@@ -234,11 +234,13 @@ impl TelemetriesCollection {
     }
 
     fn typed_collection(&self) -> Collection<Telemetry> {
-        self.db_conn.typed_collection(TelemetriesCollection::COLL_NAME)
+        self.db_conn
+            .typed_collection(TelemetriesCollection::COLL_NAME)
     }
 
     fn raw_collection(&self) -> Collection<mongodb::bson::Document> {
-        self.db_conn.typed_collection(TelemetriesCollection::COLL_NAME)
+        self.db_conn
+            .typed_collection(TelemetriesCollection::COLL_NAME)
     }
 
     pub async fn get(&self, id: i64) -> Option<Telemetry> {
@@ -250,9 +252,7 @@ impl TelemetriesCollection {
     }
 
     pub async fn exists(&self, act_id: i64) -> bool {
-        self.db_conn
-            .exists(&self.raw_collection(), act_id)
-            .await
+        self.db_conn.exists(&self.raw_collection(), act_id).await
     }
 
     pub async fn store(&self, act_id: i64, json: &mut serde_json::Value) {
