@@ -1,4 +1,4 @@
-use std::{sync::Arc};
+use std::sync::Arc;
 use crate::{
     database::{gc_db::GCDB, strava_db::StravaDB},
     strava::api::StravaApi,

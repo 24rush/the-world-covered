@@ -2,7 +2,7 @@ use mongodb::bson::doc;
 
 use crate::{
     data_types::{
-        common::Identifiable,
+        common::{DocumentId, Identifiable},
         strava::{activity::Activity, athlete::AthleteId},
     },
     logln, logvbln,
@@ -27,6 +27,49 @@ impl StravaDBSync {
         Self {
             athlete_id,
             dependencies,
+        }
+    }
+
+    pub async fn process_new_activity(&mut self, act_id: DocumentId) {
+        if self
+            .dependencies
+            .strava_db()
+            .activities
+            .exists(act_id)
+            .await
+        {
+            logvbln!("Activity {} already in DB. Skipping download.", act_id);
+
+            return;
+        }
+
+        if let Some(mut new_activity) = self.dependencies.strava_api().get_activity(act_id).await {
+            self.dependencies
+                .strava_db()
+                .activities
+                .store(act_id, &mut new_activity)
+                .await;
+
+            let mut db_activity = self
+                .dependencies
+                .strava_db()
+                .activities
+                .get(act_id)
+                .await
+                .unwrap();
+
+            // Download telemetry streams
+            self.download_telemetry(db_activity.as_i64()).await;
+
+            // Remap indexes of segments from the whole telemetry to the polyline's telemetry
+            // special procedure for re-writing activities
+            self.run_segment_poly_indexer(&mut db_activity).await;
+
+            // Add location city and country from first segment effort
+            self.run_location_fixer_activities(&mut db_activity).await;
+
+            // Fix string dates to DateTime
+            self.run_date_fixer_activities(&mut db_activity).await;
         }
     }
 
@@ -68,48 +111,7 @@ impl StravaDBSync {
                         .save_after_before_timestamps(self.athlete_id, after_ts, last_activity_ts)
                         .await;
 
-                    if self
-                        .dependencies
-                        .strava_db()
-                        .activities
-                        .exists(act_id)
-                        .await
-                    {
-                        logvbln!("Activity {} already in DB. Skipping download.", act_id);
-
-                        continue;
-                    }
-
-                    if let Some(mut new_activity) =
-                        self.dependencies.strava_api().get_activity(act_id).await
-                    {
-                        self.dependencies
-                            .strava_db()
-                            .activities
-                            .store(act_id, &mut new_activity)
-                            .await;
-
-                        let mut db_activity = self
-                            .dependencies
-                            .strava_db()
-                            .activities
-                            .get(act_id)
-                            .await
-                            .unwrap();
-
-                        // Download telemetry streams
-                        self.download_telemetry(&db_activity).await;
-
-                        // Remap indexes of segments from the whole telemetry to the polyline's telemetry
-                        // special procedure for re-writing activities
-                        self.run_segment_poly_indexer(&mut db_activity).await;
-
-                        // Add location city and country from first segment effort
-                        self.run_location_fixer_activities(&mut db_activity).await;
-
-                        // Fix string dates to DateTime
-                        self.run_date_fixer_activities(&mut db_activity).await;
-                    }
+                    self.process_new_activity(act_id).await;
                 }
             } else {
                 logln!("No activities in range.")
@@ -125,10 +127,7 @@ impl StravaDBSync {
         (last_activity_ts, has_more_items)
     }
 
-    async fn download_telemetry(&mut self, activity: &Activity) {
-        let act_id = activity.as_i64();
-        logln!("Checking if telemetry exists for activity: {}", act_id);
-
+    pub async fn download_telemetry(&mut self, act_id: DocumentId) {        
         // Check telemetry for activity
         if !self
             .dependencies
@@ -145,7 +144,8 @@ impl StravaDBSync {
                 .await
                 .unwrap();
 
-            logln!("Downloading activity telemetry...");
+            logln!("Downloading activity telemetry...{}", act_id);
+            
             if let Some(mut telemetry_json) = self
                 .dependencies
                 .strava_api()

@@ -46,6 +46,15 @@ impl ActivitiesCollection {
             .typed_collection(ActivitiesCollection::COLL_NAME)
     }
 
+    // DELETE
+    pub async fn delete(&self, id: i64) -> u64 {
+        self.typed_collection()
+            .delete_one(doc! {"_id": id}, None)
+            .await
+            .ok()
+            .unwrap().deleted_count
+    }
+
     // GETTERS
     pub async fn get(&self, id: i64) -> Option<Activity> {
         self.typed_collection()

@@ -73,6 +73,13 @@ impl Routes {
             .ok();
     }
 
+    pub async fn delete(&self, route: &Route) -> u64{
+        self.typed_collection()
+            .delete_one(doc! {"_id": route._id}, None)
+            .await
+            .unwrap().deleted_count
+    }
+
     pub async fn update(&self, route: &Route) {
         self.db_conn
             .upsert_one(&self.typed_collection(), route.as_i64(), route)

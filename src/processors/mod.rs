@@ -5,10 +5,11 @@ use std::collections::HashSet;
 use crate::{
     data_types::{common::DocumentId, strava::athlete::AthleteId},
     logvbln,
+    processors::sync_from_strava::StravaDBSync,
     util::{
         facilities::{Facilities, Required},
         geo::GeoUtils,
-    }, processors::sync_from_strava::StravaDBSync,
+    },
 };
 
 use self::commonality::Commonality;
@@ -37,7 +38,7 @@ pub enum PipelineOperationType {
 pub struct DataCreationPipelineOptions {
     pub activity_syncer: PipelineOperationType,
     pub route_matching: PipelineOperationType,
-    pub route_processor: PipelineOperationType,    
+    pub route_processor: PipelineOperationType,
 }
 
 pub struct DataPipeline {
@@ -84,6 +85,17 @@ impl DataPipeline {
             // Using created routes, run RouteProcessor
             self.run_route_processor().await;
         }
+    }
+
+    pub async fn on_new_activity(&mut self, act_id: DocumentId) {
+        let mut syncer = StravaDBSync::new(self.dependencies.clone(), self.athlete_id);
+
+        // Downloads a new activity from Strava API and process it
+        syncer.process_new_activity(act_id).await;
+
+        self.run_update_commonalities().await;
+
+        self.run_route_processor().await;
     }
 
     async fn run_sync_activities(&mut self) {
@@ -177,6 +189,8 @@ impl DataPipeline {
         }
 
         {
+            let mut syncer = StravaDBSync::new(self.dependencies.clone(), self.athlete_id);
+
             // Load processor with the missing activities' telemetry
             let all_activity_ids = self
                 .dependencies
@@ -194,6 +208,9 @@ impl DataPipeline {
             let mut count_missing = 0;
             for index in 0..missing_activity_ids.len() {
                 let missing_activity_id = missing_activity_ids[index];
+                
+                // Ensure telemetry is in DB
+                syncer.download_telemetry(*missing_activity_id).await;
 
                 let telemetry_missing = self
                     .dependencies
@@ -364,6 +381,10 @@ impl DataPipeline {
         while routes.advance().await.unwrap() {
             let mut route = routes.deserialize_current().unwrap();
 
+            if route.r#type != "" {
+                continue;
+            }
+
             let master_activity = self
                 .dependencies
                 .strava_db()
@@ -419,7 +440,7 @@ impl DataPipeline {
                         .unwrap();
 
                     // Run GradientFinder
-                    if false && act_id == route.master_activity_id {
+                    if act_id == route.master_activity_id {
                         let mut gradients =
                             gradient_finder::GradientFinder::find_gradients(&telemetry);
 

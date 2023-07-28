@@ -1,3 +1,4 @@
+use ground_covered::data_types::common::DocumentId;
 use ground_covered::App;
 use mongodb::bson::{self};
 use rocket::http::{ContentType, Status};
@@ -21,7 +22,10 @@ impl Fairing for Cors {
     }
 
     async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
-        response.set_header(Header::new("Access-Control-Allow-Origin", "http://localhost:5173"));
+        response.set_header(Header::new(
+            "Access-Control-Allow-Origin",
+            "http://localhost:5173",
+        ));
         response.set_header(Header::new(
             "Access-Control-Allow-Methods",
             "POST, PATCH, PUT, DELETE, HEAD, OPTIONS, GET",
@@ -108,18 +112,73 @@ async fn query_statistics() -> (Status, (ContentType, String)) {
     )
 }
 
+#[post("/on_activity_updated", data = "<query>")]
+async fn on_activity_updated(query: String) -> (Status, (ContentType, String)) {
+    let json: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(query.as_str()).unwrap();
+
+    let mut is_activity_creation = false;
+    let mut is_activity_deletion = false;
+
+    let mut athlete_id: Option<DocumentId> = None;
+    let mut act_id: Option<DocumentId> = None;
+
+    for key in &json {
+        match key.0.trim() {
+            "create" => {
+                is_activity_creation = true;
+                act_id = key.1.to_string().parse::<i64>().ok();
+            }
+            "delete" => {
+                is_activity_deletion = true;
+                act_id = key.1.to_string().parse::<i64>().ok();
+            }
+            "athlete_id" => {
+                athlete_id = key.1.to_string().parse::<i64>().ok();
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(athlete_id) = athlete_id {
+        if let Some(act_id) = act_id {                        
+            if let Some(app) = App::with_athlete(athlete_id).await {
+                if is_activity_creation {
+                    app.on_new_activity(act_id).await;
+                }
+
+                if is_activity_deletion {
+                    app.on_delete_activity(act_id).await;
+                }
+            }
+        }
+    }
+
+    (
+        Status::Ok,
+        (ContentType::Text, "OK".to_string()),
+    )
+}
 
 #[launch]
 fn rocket() -> _ {
-    rocket::build().attach(Cors).mount(
-        "/",
-        routes![
-            activities,
-            query_routes,
-            query_activities,
-            query_efforts,
-            query_statistics,
-            all_options
-        ],
-    )
+    rocket::build()
+        .configure(
+            rocket::Config::figment()
+                .merge(("port", 8080))
+                .merge(("address", "0.0.0.0")),
+        )
+        .attach(Cors)
+        .mount(
+            "/",
+            routes![
+                activities,
+                query_routes,
+                query_activities,
+                query_efforts,
+                query_statistics,
+                on_activity_updated,
+                all_options
+            ],
+        )
 }

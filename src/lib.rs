@@ -15,7 +15,7 @@ use mongodb::bson;
 use util::facilities::DependenciesBuilder;
 
 use processors::{
-    DataPipeline, DataCreationPipelineOptions, PipelineOperationType, SubOperationType,
+    DataCreationPipelineOptions, DataPipeline, PipelineOperationType, SubOperationType,
 };
 use strava::api::StravaApi;
 
@@ -23,9 +23,9 @@ use crate::util::logging;
 
 pub mod data_types;
 mod database;
+mod processors;
 mod strava;
 mod util;
-mod processors;
 
 pub struct TokenExchange {
     athlete_id: AthleteId,
@@ -67,14 +67,22 @@ pub struct App {
 
 impl App {
     const CC: &str = "App";
-    const LOCAL_MONGO_URL: &str = "mongodb://localhost:27017";
+
+    fn get_db_url() -> String {
+        // localhost does not have an env var set for this only server config
+        if let Ok(mongo_db_url) = std::env::var("MONGO_DB_URL") {
+            return mongo_db_url;
+        }
+
+        return "mongodb://localhost:27017".to_string();
+    }
 
     pub async fn anonym_athlete() -> App {
         Self {
             loggedin_athlete_id: None,
             strava_api: None,
-            strava_db: Arc::new(StravaDB::new(App::LOCAL_MONGO_URL).await),
-            gc_db: Arc::new(GCDB::new(App::LOCAL_MONGO_URL).await),
+            strava_db: Arc::new(StravaDB::new(&App::get_db_url()).await),
+            gc_db: Arc::new(GCDB::new(&App::get_db_url()).await),
         }
     }
 
@@ -82,8 +90,8 @@ impl App {
         let mut this = Self {
             loggedin_athlete_id: Some(athlete_id),
             strava_api: None,
-            strava_db: Arc::new(StravaDB::new(App::LOCAL_MONGO_URL).await),
-            gc_db: Arc::new(GCDB::new(App::LOCAL_MONGO_URL).await),
+            strava_db: Arc::new(StravaDB::new(&App::get_db_url()).await),
+            gc_db: Arc::new(GCDB::new(&App::get_db_url()).await),
         };
 
         if let Some(athlete_data) = this.strava_db.athletes.get_athlete_data(athlete_id).await {
@@ -93,7 +101,7 @@ impl App {
                 athlete_data.tokens,
             )
             .await;
-        
+
             this.strava_api = Some(Arc::new(StravaApi::new(token_exchange, athlete_id)));
 
             return Some(this);
@@ -124,6 +132,36 @@ impl App {
         self.strava_db.activities.get(id).await
     }
 
+    pub async fn on_new_activity(&self, act_id: i64) {
+        self.create_data_pipeline().on_new_activity(act_id).await;
+    }
+
+    pub async fn on_delete_activity(&self, act_id: i64) {
+        self.strava_db.activities.delete(act_id).await;
+
+        // Iterate over the routes and find the ones that contain the deleted activity
+        // if the route contains only one activity, then delete route
+        // else remove activity id from list and update
+        let mut existing_routes = self
+            .gc_db
+            .routes
+            .get_athlete_routes(self.loggedin_athlete_id.unwrap())
+            .await;
+
+        while existing_routes.advance().await.unwrap() {
+            let mut route = existing_routes.deserialize_current().unwrap();
+
+            if let Some(found_idx) = route.activities.iter().position(|id| *id == act_id) {
+                if route.activities.len() == 1 {
+                    self.gc_db.routes.delete(&route).await;
+                } else {
+                    route.activities.remove(found_idx);
+                    self.gc_db.routes.update(&route).await;
+                }
+            }
+        }
+    }
+
     // Currently unused, to be used when new athletes are uploaded or db rewritten
     pub async fn create_athlete(&self, id: i64) -> AthleteData {
         let mut default_athlete: AthleteData = Default::default();
@@ -137,6 +175,16 @@ impl App {
     }
 
     pub async fn start_data_pipeline(&self) {
+        self.create_data_pipeline()
+            .start(&DataCreationPipelineOptions {
+                activity_syncer: PipelineOperationType::Enabled(SubOperationType::None),
+                route_matching: PipelineOperationType::Enabled(SubOperationType::Rewrite),
+                route_processor: PipelineOperationType::Enabled(SubOperationType::None),
+            })
+            .await;
+    }
+
+    fn create_data_pipeline(&self) -> DataPipeline {
         DataPipeline::new(
             DependenciesBuilder::new()
                 .with_gc_db(&self.gc_db)
@@ -145,11 +193,5 @@ impl App {
                 .build(),
             self.loggedin_athlete_id.unwrap(),
         )
-        .start(&DataCreationPipelineOptions {
-            activity_syncer: PipelineOperationType::Enabled(SubOperationType::None),
-            route_matching: PipelineOperationType::Enabled(SubOperationType::Rewrite),
-            route_processor: PipelineOperationType::Enabled(SubOperationType::None),
-        })
-        .await;
     }
 }

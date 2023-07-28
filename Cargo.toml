@@ -7,14 +7,14 @@ edition = "2021"
 chrono = "*"
 curl = "0.4.44"
 futures-util = "0.3.28"
-geo-types = "0.7.9"
+geo-types = { version = "0.7.9", features = ["serde"] }
 once_cell = "1.17.1"
-petgraph = "0.6.3"
 polyline = "0.10.1"
 serde = "1.0.162"
 serde_derive = "1.0.162"
 serde_json = "1.0.96"
 toml = "0.7.3"
+openssl = { version = "0.10", features = ["vendored"] }
 
 [dependencies.mongodb]
 version = "2.5.0"
