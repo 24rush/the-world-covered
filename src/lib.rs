@@ -178,7 +178,7 @@ impl App {
         self.create_data_pipeline()
             .start(&DataCreationPipelineOptions {
                 activity_syncer: PipelineOperationType::Enabled(SubOperationType::None),
-                route_matching: PipelineOperationType::Enabled(SubOperationType::Rewrite),
+                route_matching: PipelineOperationType::Enabled(SubOperationType::Update),
                 route_processor: PipelineOperationType::Enabled(SubOperationType::None),
             })
             .await;
