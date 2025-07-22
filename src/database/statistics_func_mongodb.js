@@ -1,3 +1,4 @@
+// Code stored in MongoDB Atlas as trigger
 const serviceName = "mongodb-atlas";
 const strava_db = "strava_db";
 const gc_db = "gc_db";
@@ -109,46 +110,106 @@ function project_id_as_result_stage() {
     }
 }
 
-function acts_in_year(year) {
-    return [{
-        $match: {
-            start_date_local_date: date_in_year(year)
-        }
-    }];
-}
-
 function acts_with_friends_in_year(year) {
-    return [{
-        $match: {
-            athlete_count: {
-                $gt: 1
-            },
-            start_date_local_date: date_in_year(year)
-        }
-    }, count_stage()];
+    return [
+        {
+            $addFields: {
+                dateStr: {
+                    $dateFromString: {
+                        dateString: "$start_date_local"
+                    }
+                }
+            }
+        },
+        {
+            $match:
+            {
+                $or: [
+                    {
+                        athlete_count: {
+                            $gt: 1
+                        },
+                        dateStr: date_in_year(year)
+                    },
+                    {
+                        athlete_count: {
+                            $gt: 1
+                        },
+                        start_date_local_date: date_in_year(year)
+                    }]
+            }
+        },
+        {
+            $project: {
+                dateStr: 0
+            }
+        }, count_stage()];
 }
 
 function act_type_in_year(act_type, year, month) {
-    return [{
-        "$match": {
-            type: act_type,
-            start_date_local_date: date_in_year(year, month)
-        }
-    }];
+    return [
+        {
+            $addFields: {
+                dateStr: {
+                    $dateFromString: {
+                        dateString: "$start_date_local"
+                    }
+                }
+            }
+        },
+        {
+            $match: {
+                $or: [
+                    {
+                        type: act_type,
+                        dateStr: date_in_year(year)
+                    },
+                    {
+                        type: act_type,
+                        start_date_local_date: date_in_year(year)
+                    }
+                ]
+            }
+        },
+        {
+            $project: {
+                dateStr: 0
+            }
+        }];
 }
 
 function act_type_in_year_distance_gt_than(act_type, year, value) {
-    var query = [{
-        $match: {
-            type: act_type,
-            start_date_local_date: date_in_year(year),
-            "distance": { $gte: value }
-        }
-    }];
-
-    query.push(count_stage());
-
-    return query;
+    return [
+        {
+            $addFields: {
+                dateStr: {
+                    $dateFromString: {
+                        dateString: "$start_date_local"
+                    }
+                }
+            }
+        },
+        {
+            $match: {
+                $or: [
+                    {
+                        type: act_type,
+                        dateStr: date_in_year(year),
+                        "distance": { $gte: value }
+                    },
+                    {
+                        type: act_type,
+                        start_date_local_date: date_in_year(year),
+                        "distance": { $gte: value }
+                    }
+                ]
+            }
+        },
+        {
+            $project: {
+                dateStr: 0
+            }
+        }, count_stage()];
 }
 
 function act_type_in_year_count(act_type, year) {
@@ -182,13 +243,6 @@ function max_field_on_act_type_in_year(act_type, field, year) {
             field: 1,
         }
     });
-
-    return query;
-}
-
-function sort_on_field_return_id(field, year) {
-    var query = acts_in_year(year);
-    query = query.concat(sort_stage(), limit_stage(1), project_id_as_result_stage());
 
     return query;
 }
@@ -239,27 +293,37 @@ async function get_vo2max_in_year(year) {
     return [max_distance > 0 ? (max_distance - 504.9) / 44.73 : 0, max_act];
 }
 
+function weeksFromStartOfYear() {
+    const now = new Date();
+    const startOfYear = new Date(now.getFullYear(), 0, 1); // January 1st of current year
+
+    const msInWeek = 1000 * 60 * 60 * 24 * 7;
+    const diffInMs = now - startOfYear;
+
+    const weeks = diffInMs / msInWeek;
+    return Math.floor(weeks); // or Math.ceil() to round up
+}
+
 exports = async function() {
-  var years = range(2014, 2023);
+  var years = range(2014, new Date().getFullYear());
   var all_stats = new WholeStats();
-  
+  var weeks_in_current_year = weeksFromStartOfYear();
+
   for (let year of years) {
     var year_stats = new YearStats();
     all_stats.years_of_sports.push(year_stats);
     year_stats.year = year;
 
-    let vo2max_and_activity = await get_vo2max_in_year(year);
+    /*let vo2max_and_activity = await get_vo2max_in_year(year);
     year_stats.vo2max_run = vo2max_and_activity[0];
-    year_stats.best_12min_act_id = vo2max_and_activity[1];
+    year_stats.best_12min_act_id = vo2max_and_activity[1];*/
 
     year_stats.total_kudos = await run_query(total_field_on_act_type_in_year("Run", "kudos_count", year));
-    year_stats.most_kudos_activity = await run_query(sort_on_field_return_id("kudos_count", year));
     year_stats.runs_over_20k = await run_query(act_type_in_year_distance_gt_than("Run", year, 16000));
     year_stats.rides_over_100k = await run_query(act_type_in_year_distance_gt_than("Ride", year, 100000));
     year_stats.rides_over_160k = await run_query(act_type_in_year_distance_gt_than("Ride", year, 160000));
     year_stats.rides_with_friends = await run_query(acts_with_friends_in_year(year));
 
-    var weeks_in_current_year = 32;
     for (let activity_type of ["Ride", "Run"]) {
         var activity_yearly_stats = new ActivityYearlyStats();
         activity_yearly_stats.type = activity_type;
@@ -267,7 +331,7 @@ exports = async function() {
 
         activity_yearly_stats.total_elevation_gain = await run_query(total_field_on_act_type_in_year(activity_type, "total_elevation_gain", year));
         activity_yearly_stats.total_km = await run_query(total_field_on_act_type_in_year(activity_type, "distance", year)) / 1000;
-        activity_yearly_stats.mins_per_week = await run_query(total_field_on_act_type_in_year(activity_type, "moving_time", year)) / 60 / (year == 2023 ? weeks_in_current_year : 52);
+        activity_yearly_stats.mins_per_week = await run_query(total_field_on_act_type_in_year(activity_type, "moving_time", year)) / 60 / (year == 2025 ? weeks_in_current_year : 52);
         activity_yearly_stats.calories = await run_query(total_field_on_act_type_in_year(activity_type, "calories", year));
         activity_yearly_stats.count = await run_query(act_type_in_year_count(activity_type, year));
 
@@ -283,7 +347,7 @@ exports = async function() {
 
             month_stats.type = activity_type;
             month_stats.total_km = await run_query(total_field_on_act_type_in_year(activity_type, "distance", year, current_month)) / 1000;
-            month_stats.mins_per_week = await run_query(total_field_on_act_type_in_year(activity_type, "moving_time", year, current_month)) / 60 / (year == 2023 ? 32 : 52);
+            month_stats.mins_per_week = await run_query(total_field_on_act_type_in_year(activity_type, "moving_time", year, current_month)) / 60 / (year == 2025 ? weeks_in_current_year : 52);
 
             year_stats.current_month.push(month_stats);
         }
