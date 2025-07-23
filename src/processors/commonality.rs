@@ -66,7 +66,7 @@ pub struct Commonality {
 }
 
 impl<'a> Commonality {
-    const CC: &str = "Commonality";
+    const CC: &'static str = "Commonality";
 
     // Used for update procedure so we know where to start creating new indexes from
     pub fn set_set_first_route_index(&mut self, start: DocumentId) {

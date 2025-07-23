@@ -127,7 +127,7 @@ impl StravaDBSync {
         (last_activity_ts, has_more_items)
     }
 
-    pub async fn download_telemetry(&mut self, act_id: DocumentId) {        
+    pub async fn download_telemetry(&mut self, act_id: DocumentId) {
         // Check telemetry for activity
         if !self
             .dependencies
@@ -145,7 +145,7 @@ impl StravaDBSync {
                 .unwrap();
 
             logln!("Downloading activity telemetry...{}", act_id);
-            
+
             if let Some(mut telemetry_json) = self
                 .dependencies
                 .strava_api()
@@ -179,8 +179,13 @@ impl StravaDBSync {
             .strava_db()
             .telemetries
             .get(act_id)
-            .await
-            .unwrap();
+            .await;
+
+        if let None = telemetry {
+            return;
+        } 
+
+        let ref_telemetry = telemetry.unwrap();
 
         let mut indexes_in_polyline: Vec<usize> = vec![];
         let mut needs_poly_index_update = false;
@@ -190,7 +195,7 @@ impl StravaDBSync {
             if let None = effort.start_index_poly {
                 indexes_in_polyline = GeoUtils::create_polyline_mapping_table(
                     &activity.map.polyline,
-                    &telemetry.latlng.data,
+                    &ref_telemetry.latlng.data,
                 );
 
                 needs_poly_index_update = true;
@@ -198,7 +203,7 @@ impl StravaDBSync {
             }
         }
 
-        for mut segment_effort in activity.segment_efforts.iter_mut() {
+        for segment_effort in activity.segment_efforts.iter_mut() {
             if needs_poly_index_update {
                 segment_effort.start_index_poly =
                     Some(indexes_in_polyline[segment_effort.start_index as usize] as i32);
@@ -226,7 +231,7 @@ impl StravaDBSync {
                 .activities
                 .set_segment_distance_from_start(
                     segment_effort.id,
-                    telemetry.distance.data[segment_effort.start_index as usize],
+                    ref_telemetry.distance.data[segment_effort.start_index as usize],
                 )
                 .await;
         }
@@ -276,7 +281,7 @@ impl StravaDBSync {
 
         activity.segment_efforts.iter().for_each(|effort| {
             if let Some(effort_country) = &effort.segment.country {
-                activity.location_country = effort_country.to_string();
+                activity.location_country = Some(effort_country.to_string());
                 return;
             }
         });

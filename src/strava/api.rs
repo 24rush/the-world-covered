@@ -106,7 +106,8 @@ impl StravaApi {
     ) -> Option<serde_json::Value> {
         if let Some(json_result) = result.ok() {
             if let Some(_) = json_result.get("errors") {
-                panic!("{:?}", json_result.get("message").unwrap())
+                logln!("{:?}", json_result.get("message").unwrap());
+                return None;
             } else {
                 return Some(json_result);
             }

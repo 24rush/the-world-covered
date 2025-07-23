@@ -130,7 +130,7 @@ impl ActivitiesCollection {
             .await;
     }
 
-    pub async fn set_location_country(&self, act_id: i64, country: &String) {
+    pub async fn set_location_country(&self, act_id: i64, country: &Option<String>) {
         self.update("_id".to_owned(), act_id, "location_country", &country)
             .await;
     }

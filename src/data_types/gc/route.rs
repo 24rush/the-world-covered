@@ -32,7 +32,7 @@ pub struct Route {
 
     pub description: Option<String>,
     pub location_city: Option<String>,
-    pub location_country: String,
+    pub location_country: Option<String>,
     pub polyline: String,    
 
     pub gradients: Vec<Gradient>,

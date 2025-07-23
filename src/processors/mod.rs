@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use crate::{
     data_types::{common::DocumentId, strava::athlete::AthleteId},
-    logvbln,
+    logln, logvbln,
     processors::sync_from_strava::StravaDBSync,
     util::{
         facilities::{Facilities, Required},
@@ -92,10 +92,12 @@ impl DataPipeline {
 
         // Downloads a new activity from Strava API and process it
         syncer.process_new_activity(act_id).await;
+        logln!("onnewactivity processed");
 
         self.run_update_commonalities().await;
 
         self.run_route_processor().await;
+        logln!("run_route_processor processed");
     }
 
     async fn run_sync_activities(&mut self) {
@@ -208,20 +210,20 @@ impl DataPipeline {
             let mut count_missing = 0;
             for index in 0..missing_activity_ids.len() {
                 let missing_activity_id = missing_activity_ids[index];
-                
+
                 // Ensure telemetry is in DB
                 syncer.download_telemetry(*missing_activity_id).await;
 
-                let telemetry_missing = self
+                if let Some(telemetry_missing) = self
                     .dependencies
                     .strava_db()
                     .telemetries
                     .get(*missing_activity_id)
                     .await
-                    .unwrap();
-
-                if processor.load_telemetry(&telemetry_missing) {
-                    count_missing += 1;
+                {
+                    if processor.load_telemetry(&telemetry_missing) {
+                        count_missing += 1;
+                    }
                 }
             }
 
@@ -244,15 +246,17 @@ impl DataPipeline {
             while existing_routes.advance().await.unwrap() {
                 let mut route = existing_routes.deserialize_current().unwrap();
 
-                let telemetry_master = self
+                if let Some(telemetry_master) = self
                     .dependencies
                     .strava_db()
                     .telemetries
                     .get(route.master_activity_id)
                     .await
-                    .unwrap();
-
-                processor.load_telemetry(&telemetry_master);
+                {
+                    processor.load_telemetry(&telemetry_master);
+                } else {
+                    continue;
+                }
 
                 // Go over the matched missing activities and test if they can be grouped with current route
                 // - remove from list at first match
@@ -452,7 +456,7 @@ impl DataPipeline {
                             gradients.iter_mut().for_each(|gradient| {
                                 // Search through the segment efforts and find a matching start to fill the location data
                                 gradient.location_city = route.location_city.clone();
-                                gradient.location_country = Some(route.location_country.clone());
+                                gradient.location_country = route.location_country.clone();
 
                                 for effort in &activity.segment_efforts {
                                     if gradient.start_index >= effort.start_index as usize {

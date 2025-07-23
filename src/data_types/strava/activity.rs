@@ -46,10 +46,10 @@ pub struct Activity {
     pub elapsed_time: i32,
     pub total_elevation_gain: f32,
     
-    pub athlete_count: u8,
+    pub athlete_count: i32,
     pub description: Option<String>,
     pub location_city: Option<String>,
-    pub location_country: String,
+    pub location_country: Option<String>,
     pub start_date_local: String,
     pub start_date_local_date: Option<DateTime>
 }
